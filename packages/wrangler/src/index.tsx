@@ -227,7 +227,7 @@ export async function main(argv: string[]): Promise<void> {
             "./package.json",
             JSON.stringify(
               {
-                name: "worker",
+                name: args.name || path.basename(path.resolve(process.cwd())),
                 version: "0.0.0",
                 devDependencies: {
                   wrangler: wranglerVersion,
@@ -347,6 +347,18 @@ export async function main(argv: string[]): Promise<void> {
                 "utf-8"
               )
             );
+
+            await writeFile(
+              pathToPackageJson,
+              JSON.stringify({
+                ...JSON.parse(await readFile(pathToPackageJson, "utf-8")),
+                scripts: {
+                  start: "wrangler dev src/index.ts",
+                  deploy: "wrangler publish src/index.ts",
+                },
+              })
+            );
+
             console.log(`✨ Created src/index.ts`);
           }
         }
@@ -364,6 +376,18 @@ export async function main(argv: string[]): Promise<void> {
                 "utf-8"
               )
             );
+
+            await writeFile(
+              pathToPackageJson,
+              JSON.stringify({
+                ...JSON.parse(await readFile(pathToPackageJson, "utf-8")),
+                scripts: {
+                  start: "wrangler dev src/index.js",
+                  deploy: "wrangler publish src/index.js",
+                },
+              })
+            );
+
             console.log(`✨ Created src/index.js`);
           }
         }

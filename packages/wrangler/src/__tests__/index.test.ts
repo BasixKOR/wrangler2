@@ -163,7 +163,7 @@ describe("wrangler", () => {
       const packageJson = JSON.parse(
         fs.readFileSync("./package.json", "utf-8")
       );
-      expect(packageJson.name).toEqual("worker"); // TODO: should we infer the name from the directory?
+      expect(packageJson.name).toContain("wrangler-tests");
       expect(packageJson.version).toEqual("0.0.0");
       expect(packageJson.devDependencies).toEqual({
         wrangler: expect.any(String),
@@ -327,6 +327,76 @@ describe("wrangler", () => {
       await runWrangler("init");
       expect(fs.existsSync("./src/index.js")).toBe(false);
       expect(fs.existsSync("./src/index.ts")).toBe(true);
+    });
+
+    it("should add scripts for a typescript project with .ts extension", async () => {
+      mockConfirm(
+        {
+          text: "No package.json found. Would you like to create one?",
+          result: true,
+        },
+        {
+          text: "Would you like to install wrangler into your package.json?",
+          result: false,
+        },
+        {
+          text: "Would you like to use TypeScript?",
+          result: true,
+        },
+        {
+          text: "Would you like to create a Worker at src/index.ts?",
+          result: true,
+        }
+      );
+      await runWrangler("init");
+
+      expect(fs.existsSync("./package.json")).toBe(true);
+      const packageJson = JSON.parse(
+        fs.readFileSync("./package.json", "utf-8")
+      );
+
+      expect(fs.existsSync("./src/index.js")).toBe(false);
+      expect(fs.existsSync("./src/index.ts")).toBe(true);
+
+      expect(packageJson.scripts.start).toBe("wrangler dev src/index.ts");
+      expect(packageJson.scripts.deploy).toBe("wrangler publish src/index.ts");
+      expect(packageJson.name).toContain("wrangler-tests");
+      expect(packageJson.version).toEqual("0.0.0");
+    });
+
+    it("should add scripts for a non-ts project with .js extension", async () => {
+      mockConfirm(
+        {
+          text: "No package.json found. Would you like to create one?",
+          result: true,
+        },
+        {
+          text: "Would you like to install wrangler into your package.json?",
+          result: false,
+        },
+        {
+          text: "Would you like to use TypeScript?",
+          result: false,
+        },
+        {
+          text: "Would you like to create a Worker at src/index.js?",
+          result: true,
+        }
+      );
+      await runWrangler("init");
+
+      expect(fs.existsSync("./package.json")).toBe(true);
+      const packageJson = JSON.parse(
+        fs.readFileSync("./package.json", "utf-8")
+      );
+
+      expect(fs.existsSync("./src/index.js")).toBe(true);
+      expect(fs.existsSync("./src/index.ts")).toBe(false);
+
+      expect(packageJson.scripts.start).toBe("wrangler dev src/index.js");
+      expect(packageJson.scripts.deploy).toBe("wrangler publish src/index.js");
+      expect(packageJson.name).toContain("wrangler-tests");
+      expect(packageJson.version).toEqual("0.0.0");
     });
 
     it("should not offer to create a worker in a non-ts project if a file already exists at the location", async () => {
