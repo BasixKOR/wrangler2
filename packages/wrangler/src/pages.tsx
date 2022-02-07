@@ -758,6 +758,11 @@ export const pages: BuilderCallback<unknown, unknown> = (yargs) => {
               default: false,
               description: "Auto reload HTML pages when change is detected",
             },
+            env: {
+              type: "string",
+              default: true, // Miniflare treats this value as default filename.
+              description: ".env files to bind",
+            },
             // TODO: Miniflare user options
           });
       },
@@ -772,6 +777,7 @@ export const pages: BuilderCallback<unknown, unknown> = (yargs) => {
         do: durableObjects = [],
         "live-reload": liveReload,
         "--": remaining = [],
+        env,
       }) => {
         if (!local) {
           console.error("Only local mode is supported at the moment.");
@@ -897,6 +903,8 @@ export const pages: BuilderCallback<unknown, unknown> = (yargs) => {
               bindings.map((binding) => binding.toString().split("="))
             ),
           },
+
+          envPath: env,
 
           // env.ASSETS.fetch
           serviceBindings: {
