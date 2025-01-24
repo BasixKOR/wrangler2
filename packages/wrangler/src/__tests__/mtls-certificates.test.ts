@@ -1,12 +1,12 @@
 import { writeFileSync } from "fs";
-import { rest } from "msw";
+import { http, HttpResponse } from "msw";
 import {
-	uploadMTlsCertificateFromFs,
-	uploadMTlsCertificate,
-	listMTlsCertificates,
 	deleteMTlsCertificate,
 	getMTlsCertificate,
 	getMTlsCertificateByName,
+	listMTlsCertificates,
+	uploadMTlsCertificate,
+	uploadMTlsCertificateFromFs,
 } from "../api";
 import { mockAccountId, mockApiToken } from "./helpers/mock-account-id";
 import { mockConsoleMethods } from "./helpers/mock-console";
@@ -34,29 +34,28 @@ describe("wrangler", () => {
 	) {
 		const config = { calls: 0 };
 		msw.use(
-			rest.post(
+			http.post(
 				"*/accounts/:accountId/mtls_certificates",
-				async (request, response, context) => {
+				async ({ request }) => {
 					config.calls++;
 
-					const body = await request.json();
-					return response.once(
-						context.json({
-							success: true,
-							errors: [],
-							messages: [],
-							result: {
-								id: "1234",
-								name: body.name,
-								certificates: body.certificates,
-								issuer: "example.com...",
-								uploaded_on: now.toISOString(),
-								expires_on: oneYearLater.toISOString(),
-								...resp,
-							},
-						})
-					);
-				}
+					const body = (await request.json()) as Record<string, unknown>;
+					return HttpResponse.json({
+						success: true,
+						errors: [],
+						messages: [],
+						result: {
+							id: "1234",
+							name: body.name,
+							certificates: body.certificates,
+							issuer: "example.com...",
+							uploaded_on: now.toISOString(),
+							expires_on: oneYearLater.toISOString(),
+							...resp,
+						},
+					});
+				},
+				{ once: true }
 			)
 		);
 		return config;
@@ -67,40 +66,39 @@ describe("wrangler", () => {
 	) {
 		const config = { calls: 0 };
 		msw.use(
-			rest.get(
+			http.get(
 				"*/accounts/:accountId/mtls_certificates",
-				async (request, response, context) => {
+				async () => {
 					config.calls++;
 
-					return response.once(
-						context.json({
-							success: true,
-							errors: [],
-							messages: [],
-							result:
-								typeof certs === "undefined"
-									? [
-											{
-												id: "1234",
-												name: "cert one",
-												certificates: "BEGIN CERTIFICATE...",
-												issuer: "example.com...",
-												uploaded_on: now.toISOString(),
-												expires_on: oneYearLater.toISOString(),
-											},
-											{
-												id: "5678",
-												name: "cert two",
-												certificates: "BEGIN CERTIFICATE...",
-												issuer: "example.com...",
-												uploaded_on: now.toISOString(),
-												expires_on: oneYearLater.toISOString(),
-											},
-									  ]
-									: certs,
-						})
-					);
-				}
+					return HttpResponse.json({
+						success: true,
+						errors: [],
+						messages: [],
+						result:
+							typeof certs === "undefined"
+								? [
+										{
+											id: "1234",
+											name: "cert one",
+											certificates: "BEGIN CERTIFICATE...",
+											issuer: "example.com...",
+											uploaded_on: now.toISOString(),
+											expires_on: oneYearLater.toISOString(),
+										},
+										{
+											id: "5678",
+											name: "cert two",
+											certificates: "BEGIN CERTIFICATE...",
+											issuer: "example.com...",
+											uploaded_on: now.toISOString(),
+											expires_on: oneYearLater.toISOString(),
+										},
+									]
+								: certs,
+					});
+				},
+				{ once: true }
 			)
 		);
 		return config;
@@ -109,27 +107,26 @@ describe("wrangler", () => {
 	function mockGetMTlsCertificate(resp: Partial<MTlsCertificateResponse> = {}) {
 		const config = { calls: 0 };
 		msw.use(
-			rest.get(
+			http.get(
 				"*/accounts/:accountId/mtls_certificates/:certId",
-				async (request, response, context) => {
+				async () => {
 					config.calls++;
 
-					return response.once(
-						context.json({
-							success: true,
-							errors: [],
-							messages: [],
-							result: {
-								id: "1234",
-								certificates: "BEGIN CERTIFICATE...",
-								issuer: "example.com...",
-								uploaded_on: now.toISOString(),
-								expires_on: oneYearLater.toISOString(),
-								...resp,
-							},
-						})
-					);
-				}
+					return HttpResponse.json({
+						success: true,
+						errors: [],
+						messages: [],
+						result: {
+							id: "1234",
+							certificates: "BEGIN CERTIFICATE...",
+							issuer: "example.com...",
+							uploaded_on: now.toISOString(),
+							expires_on: oneYearLater.toISOString(),
+							...resp,
+						},
+					});
+				},
+				{ once: true }
 			)
 		);
 		return config;
@@ -138,20 +135,19 @@ describe("wrangler", () => {
 	function mockDeleteMTlsCertificate() {
 		const config = { calls: 0 };
 		msw.use(
-			rest.delete(
+			http.delete(
 				"*/accounts/:accountId/mtls_certificates/:certId",
-				async (request, response, context) => {
+				async () => {
 					config.calls++;
 
-					return response.once(
-						context.json({
-							success: true,
-							errors: [],
-							messages: [],
-							result: null,
-						})
-					);
-				}
+					return HttpResponse.json({
+						success: true,
+						errors: [],
+						messages: [],
+						result: null,
+					});
+				},
+				{ once: true }
 			)
 		);
 		return config;
@@ -356,48 +352,24 @@ describe("wrangler", () => {
 		describe("commands", () => {
 			describe("help", () => {
 				it("should show the correct help text", async () => {
-					await runWrangler("mtls-certifiate --help");
+					await runWrangler("mtls-certificate --help");
 					expect(std.err).toMatchInlineSnapshot(`""`);
 					expect(std.out).toMatchInlineSnapshot(`
-				"wrangler
+						"wrangler mtls-certificate
 
-				Commands:
-				  wrangler docs [command..]            📚 Open wrangler's docs in your browser
-				  wrangler init [name]                 📥 Initialize a basic Worker project, including a wrangler.toml file
-				  wrangler generate [name] [template]  ✨ Generate a new Worker project from an existing Worker template. See https://github.com/cloudflare/templates
-				  wrangler dev [script]                👂 Start a local server for developing your worker
-				  wrangler publish [script]            🆙 Publish your Worker to Cloudflare.
-				  wrangler delete [script]             🗑  Delete your Worker from Cloudflare.
-				  wrangler tail [worker]               🦚 Starts a log tailing session for a published Worker.
-				  wrangler secret                      🤫 Generate a secret that can be referenced in a Worker
-				  wrangler secret:bulk <json>          🗄️  Bulk upload secrets for a Worker
-				  wrangler kv:namespace                🗂️  Interact with your Workers KV Namespaces
-				  wrangler kv:key                      🔑 Individually manage Workers KV key-value pairs
-				  wrangler kv:bulk                     💪 Interact with multiple Workers KV key-value pairs at once
-				  wrangler pages                       ⚡️ Configure Cloudflare Pages
-				  wrangler queues                      🇶 Configure Workers Queues
-				  wrangler r2                          📦 Interact with an R2 store
-				  wrangler dispatch-namespace          📦 Interact with a dispatch namespace
-				  wrangler d1                          🗄  Interact with a D1 database
-				  wrangler constellation               🤖 Interact with Constellation AI models
-				  wrangler pubsub                      📮 Interact and manage Pub/Sub Brokers
-				  wrangler mtls-certificate            🪪 Manage certificates used for mTLS connections
-				  wrangler login                       🔓 Login to Cloudflare
-				  wrangler logout                      🚪 Logout from Cloudflare
-				  wrangler whoami                      🕵️  Retrieve your user info and test your auth config
-				  wrangler types                       📝 Generate types from bindings & module rules in config
-				  wrangler deployments                 🚢 List and view details for deployments
-				  wrangler rollback [deployment-id]    🔙 Rollback a deployment
+						🪪  Manage certificates used for mTLS connections
 
-				Flags:
-				  -j, --experimental-json-config  Experimental: Support wrangler.json  [boolean]
-				  -c, --config                    Path to .toml configuration file  [string]
-				  -e, --env                       Environment to use for operations and .env files  [string]
-				  -h, --help                      Show help  [boolean]
-				  -v, --version                   Show version number  [boolean]
+						COMMANDS
+						  wrangler mtls-certificate upload  Upload an mTLS certificate
+						  wrangler mtls-certificate list    List uploaded mTLS certificates
+						  wrangler mtls-certificate delete  Delete an mTLS certificate
 
-				🚧\`wrangler rollback\` is a beta command. Please report any issues to https://github.com/cloudflare/workers-sdk/issues/new/choose"
-			`);
+						GLOBAL FLAGS
+						  -c, --config   Path to Wrangler configuration file  [string]
+						  -e, --env      Environment to use for operations and .env files  [string]
+						  -h, --help     Show help  [boolean]
+						  -v, --version  Show version number  [boolean]"
+					`);
 				});
 			});
 
@@ -534,10 +506,7 @@ Expires on: ${oneYearLater.toLocaleDateString()}
 					).rejects.toMatchInlineSnapshot(
 						`[Error: certificate not found with name "my-cert"]`
 					);
-					expect(std.out).toMatchInlineSnapshot(`
-				"
-				[32mIf you think this is a bug then please create an issue at https://github.com/cloudflare/workers-sdk/issues/new/choose[0m"
-			`);
+					expect(std.out).toMatchInlineSnapshot(`""`);
 				});
 
 				it("should not delete when many certificates are found by name", async () => {
@@ -565,10 +534,7 @@ Expires on: ${oneYearLater.toLocaleDateString()}
 					).rejects.toMatchInlineSnapshot(
 						`[Error: multiple certificates found with name "my-cert"]`
 					);
-					expect(std.out).toMatchInlineSnapshot(`
-				"
-				[32mIf you think this is a bug then please create an issue at https://github.com/cloudflare/workers-sdk/issues/new/choose[0m"
-			`);
+					expect(std.out).toMatchInlineSnapshot(`""`);
 				});
 
 				it("should not delete when confirmation fails", async () => {

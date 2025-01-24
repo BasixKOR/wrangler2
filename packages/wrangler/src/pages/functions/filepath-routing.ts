@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { build } from "esbuild";
+import { FatalError } from "../../errors";
 import { toUrlPath } from "../../paths";
+import { FunctionsBuildError } from "../errors";
 import type { UrlPath } from "../../paths";
 import type { HTTPMethod, RouteConfig } from "./routes";
 
@@ -30,6 +32,8 @@ export async function generateConfigFromFileTree({
 				write: false,
 				bundle: false,
 				entryPoints: [path.resolve(filepath)],
+			}).catch((e) => {
+				throw new FunctionsBuildError(e.message);
 			});
 			const exportNames: string[] = [];
 			if (metafile) {
@@ -69,10 +73,10 @@ export async function generateConfigFromFileTree({
 					routePath = `${baseURL}/${routePath}`;
 					mountPath = `${baseURL}/${mountPath}`;
 
-					routePath = routePath.replace(/\[\[([^\]]+)\]\]/g, ":$1*"); // transform [[id]] => :id*
-					routePath = routePath.replaceAll(/\[([^\]]+)\]/g, ":$1"); // transform [id] => :id
-					mountPath = mountPath.replace(/\[\[([^\]]+)\]\]/g, ":$1*"); // transform [[id]] => :id*
-					mountPath = mountPath.replaceAll(/\[([^\]]+)\]/g, ":$1"); // transform [id] => :id
+					routePath = convertCatchallParams(routePath);
+					routePath = convertSimpleParams(routePath);
+					mountPath = convertCatchallParams(mountPath);
+					mountPath = convertSimpleParams(mountPath);
 
 					// These are used as module specifiers so UrlPaths are okay to use even on Windows
 					const modulePath = toUrlPath(path.relative(baseDir, filepath));
@@ -142,17 +146,29 @@ export function compareRoutes(
 		const isParamB = segmentsB[i].includes(":");
 
 		// sort wildcard segments after non-wildcard segments
-		if (isWildcardA && !isWildcardB) return 1;
-		if (!isWildcardA && isWildcardB) return -1;
+		if (isWildcardA && !isWildcardB) {
+			return 1;
+		}
+		if (!isWildcardA && isWildcardB) {
+			return -1;
+		}
 
 		// sort dynamic param segments after non-param segments
-		if (isParamA && !isParamB) return 1;
-		if (!isParamA && isParamB) return -1;
+		if (isParamA && !isParamB) {
+			return 1;
+		}
+		if (!isParamA && isParamB) {
+			return -1;
+		}
 	}
 
 	// sort routes that specify an HTTP before those that don't
-	if (methodA && !methodB) return -1;
-	if (!methodA && methodB) return 1;
+	if (methodA && !methodB) {
+		return -1;
+	}
+	if (!methodA && methodB) {
+		return 1;
+	}
 
 	// all else equal, just sort the paths lexicographically
 	return routePathA.localeCompare(routePathB);
@@ -186,4 +202,39 @@ interface NonEmptyArray<T> extends Array<T> {
 }
 function isNotEmpty<T>(array: T[]): array is NonEmptyArray<T> {
 	return array.length > 0;
+}
+
+/**
+ * See https://github.com/pillarjs/path-to-regexp?tab=readme-ov-file#named-parameters
+ */
+const validParamNameRegExp = /^[A-Za-z0-9_]+$/;
+
+/**
+ * Transform all [[id]] => :id*
+ */
+function convertCatchallParams(routePath: string): string {
+	return routePath.replace(/\[\[([^\]]+)\]\]/g, (_, param) => {
+		if (validParamNameRegExp.test(param)) {
+			return `:${param}*`;
+		} else {
+			throw new FatalError(
+				`Invalid Pages function route parameter - "[[${param}]]". Parameters names must only contain alphanumeric and underscore characters.`
+			);
+		}
+	});
+}
+
+/**
+ * Transform all [id] => :id
+ */
+function convertSimpleParams(routePath: string): string {
+	return routePath.replace(/\[([^\]]+)\]/g, (_, param) => {
+		if (validParamNameRegExp.test(param)) {
+			return `:${param}`;
+		} else {
+			throw new FatalError(
+				`Invalid Pages function route parameter - "[${param}]". Parameter names must only contain alphanumeric and underscore characters.`
+			);
+		}
+	});
 }

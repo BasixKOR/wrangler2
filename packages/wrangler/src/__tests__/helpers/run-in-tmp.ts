@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import os from "node:os";
 import * as path from "node:path";
+import { vi } from "vitest";
 import { reinitialiseAuthTokens } from "../../user";
 
 const originalCwd = process.cwd();
@@ -15,6 +16,7 @@ export function runInTempDir({ homedir } = { homedir: "./home" }) {
 		);
 
 		process.chdir(tmpDir);
+		process.env.PWD = tmpDir;
 		// The path that is returned from `homedir()` should be absolute.
 		const absHomedir = path.resolve(tmpDir, homedir);
 		// Override where the home directory is so that we can write our own user config,
@@ -24,7 +26,7 @@ export function runInTempDir({ homedir } = { homedir: "./home" }) {
 		// rather than an alias to the module (e.g. `import * as os from "node:os";`).
 		// This is because the module gets transpiled so that the "method" `homedir()` gets converted to a
 		// getter that is not configurable (and so cannot be spied upon).
-		jest.spyOn(os, "homedir")?.mockReturnValue(absHomedir);
+		vi.spyOn(os, "homedir")?.mockReturnValue(absHomedir);
 		// Now that we have changed the home directory location, we must reinitialize the user auth state
 		reinitialiseAuthTokens();
 	});
@@ -32,7 +34,22 @@ export function runInTempDir({ homedir } = { homedir: "./home" }) {
 	afterEach(() => {
 		if (fs.existsSync(tmpDir)) {
 			process.chdir(originalCwd);
-			fs.rmSync(tmpDir, { recursive: true });
+			process.env.PWD = originalCwd;
+			try {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			} catch (e) {
+				// It seems that Windows doesn't let us delete this, with errors like:
+				//
+				// Error: EBUSY: resource busy or locked, rmdir 'C:\Users\RUNNER~1\AppData\Local\Temp\wrangler-modules-pKJ7OQ'
+				// ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+				// Serialized Error: {
+				// 	"code": "EBUSY",
+				// 	"errno": -4082,
+				// 	"path": "C:\Users\RUNNER~1\AppData\Local\Temp\wrangler-modules-pKJ7OQ",
+				// 	"syscall": "rmdir",
+				// }
+				console.error(e);
+			}
 		}
 	});
 }

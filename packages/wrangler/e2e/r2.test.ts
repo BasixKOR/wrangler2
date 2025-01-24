@@ -2,122 +2,98 @@ import crypto from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { RUN, runIn } from "./helpers/run";
-import { makeRoot, seed } from "./helpers/setup";
+import { WranglerE2ETestHelper } from "./helpers/e2e-wrangler-test";
+import { generateResourceName } from "./helpers/generate-resource-name";
+import { normalizeOutput } from "./helpers/normalize";
 
-describe("r2", async () => {
-	const root = await makeRoot();
-	const bucketName = `wrangler-smoke-test-bucket-${crypto
-		.randomBytes(4)
-		.toString("hex")}`;
+describe("r2", () => {
+	const bucketName = generateResourceName("r2");
 	const fileContents = crypto.randomBytes(64).toString("hex");
+	const normalize = (str: string) =>
+		normalizeOutput(str, {
+			[bucketName]: "tmp-e2e-r2",
+			[process.env.CLOUDFLARE_ACCOUNT_ID as string]: "CLOUDFLARE_ACCOUNT_ID",
+		});
+	const helper = new WranglerE2ETestHelper();
 
 	it("create bucket", async () => {
-		const { stdout, stderr } = await runIn(root, {
-			[bucketName]: "wrangler-smoke-test-bucket",
-		})`
-    $ ${RUN} r2 bucket create ${bucketName}
-    `;
-		expect(stdout).toMatchInlineSnapshot(`
-			"Creating bucket wrangler-smoke-test-bucket.
-			Created bucket wrangler-smoke-test-bucket."
+		const output = await helper.run(`wrangler r2 bucket create ${bucketName}`);
+
+		expect(normalize(output.stdout)).toMatchInlineSnapshot(`
+			"Creating bucket 'tmp-e2e-r2-00000000-0000-0000-0000-000000000000'...
+			✅ Created bucket 'tmp-e2e-r2-00000000-0000-0000-0000-000000000000' with default storage class of Standard.
+			Configure your Worker to write objects to this bucket:
+			{
+			  "r2_buckets": [
+			    {
+			      "bucket_name": "tmp-e2e-r2-00000000-0000-0000-0000-000000000000",
+			      "binding": "tmp_e2e_r2_00000000_0000_0000_0000_000000000000"
+			    }
+			  ]
+			}"
 		`);
-		expect(stderr).toMatchInlineSnapshot('""');
 	});
+
 	it("create object", async () => {
-		await seed(root, {
+		await helper.seed({
 			"test-r2.txt": fileContents,
 		});
-		const { stdout, stderr } = await runIn(root, {
-			[bucketName]: "wrangler-smoke-test-bucket",
-		})`
-	  $ ${RUN} r2 object put ${`${bucketName}/testr2`} --file test-r2.txt --content-type text/html
-	`;
-		expect(stdout).toMatchInlineSnapshot(`
-			"Creating object \\"testr2\\" in bucket \\"wrangler-smoke-test-bucket\\".
+		const output = await helper.run(
+			`wrangler r2 object put ${bucketName}/testr2 --file test-r2.txt --content-type text/html`
+		);
+		expect(normalize(output.stdout)).toMatchInlineSnapshot(`
+			"Creating object "testr2" in bucket "tmp-e2e-r2-00000000-0000-0000-0000-000000000000".
 			Upload complete."
 		`);
-		expect(stderr).toMatchInlineSnapshot('""');
 	});
+
 	it("download object", async () => {
-		const { stdout, stderr } = await runIn(root, {
-			[bucketName]: "wrangler-smoke-test-bucket",
-		})`
-	  $ ${RUN} r2 object get ${`${bucketName}/testr2`} --file test-r2o.txt
-	`;
-		expect(stdout).toMatchInlineSnapshot(`
-			"Downloading \\"testr2\\" from \\"wrangler-smoke-test-bucket\\".
+		const output = await helper.run(
+			`wrangler r2 object get ${bucketName}/testr2 --file test-r2o.txt`
+		);
+		expect(normalize(output.stdout)).toMatchInlineSnapshot(`
+			"Downloading "testr2" from "tmp-e2e-r2-00000000-0000-0000-0000-000000000000".
 			Download complete."
 		`);
-		expect(stderr).toMatchInlineSnapshot('""');
-		const output = await readFile(path.join(root, "test-r2o.txt"), "utf8");
-		expect(output).toBe(fileContents);
+		const file = await readFile(
+			path.join(helper.tmpPath, "test-r2o.txt"),
+			"utf8"
+		);
+		expect(file).toBe(fileContents);
 	});
+
 	it("delete object", async () => {
-		const { stdout, stderr } = await runIn(root, {
-			[bucketName]: "wrangler-smoke-test-bucket",
-		})`
-	  $ ${RUN} r2 object delete ${`${bucketName}/testr2`}
-	`;
-		expect(stdout).toMatchInlineSnapshot(`
-			"Deleting object \\"testr2\\" from bucket \\"wrangler-smoke-test-bucket\\".
+		const output = await helper.run(
+			`wrangler r2 object delete ${bucketName}/testr2`
+		);
+		expect(normalize(output.stdout)).toMatchInlineSnapshot(`
+			"Deleting object "testr2" from bucket "tmp-e2e-r2-00000000-0000-0000-0000-000000000000".
 			Delete complete."
 		`);
-		expect(stderr).toMatchInlineSnapshot('""');
 	});
+
 	it("check object deleted", async () => {
-		const { stdout, stderr } = await runIn(root, {
-			[bucketName]: "wrangler-smoke-test-bucket",
-			[process.env.CLOUDFLARE_ACCOUNT_ID as string]: "CLOUDFLARE_ACCOUNT_ID",
-		})`
-    exits(1) {
-	    $ ${RUN} r2 object get ${`${bucketName}/testr2`} --file test-r2o.txt
-    }
-    `;
-		expect(stdout).toMatchInlineSnapshot(`
-			"Downloading \\"testr2\\" from \\"wrangler-smoke-test-bucket\\".
-
-			If you think this is a bug then please create an issue at https://github.com/cloudflare/workers-sdk/issues/new/choose"
-		`);
-		expect(stderr).toMatchInlineSnapshot(`
-			"X [ERROR] Failed to fetch /accounts/CLOUDFLARE_ACCOUNT_ID/r2/buckets/wrangler-smoke-test-bucket/objects/testr2 - 404: Not Found);
-
-			"
-		`);
+		const output = await helper.run(
+			`wrangler r2 object get ${bucketName}/testr2 --file test-r2o.txt`
+		);
+		expect(output.stderr).toContain("The specified key does not exist");
 	});
+
 	it("delete bucket", async () => {
-		const { stdout, stderr } = await runIn(root, {
-			[bucketName]: "wrangler-smoke-test-bucket",
-		})`
-    $ ${RUN} r2 bucket delete ${bucketName}
-    `;
-		expect(stdout).toMatchInlineSnapshot(`
-			"Deleting bucket wrangler-smoke-test-bucket.
-			Deleted bucket wrangler-smoke-test-bucket."
+		const output = await helper.run(`wrangler r2 bucket delete ${bucketName}`);
+		expect(normalize(output.stdout)).toMatchInlineSnapshot(`
+			"Deleting bucket tmp-e2e-r2-00000000-0000-0000-0000-000000000000.
+			Deleted bucket tmp-e2e-r2-00000000-0000-0000-0000-000000000000."
 		`);
-		expect(stderr).toMatchInlineSnapshot('""');
 	});
+
 	it("check bucket deleted", async () => {
-		await seed(root, {
+		await helper.seed({
 			"test-r2.txt": fileContents,
 		});
-		const { stdout, stderr } = await runIn(root, {
-			[bucketName]: "wrangler-smoke-test-bucket",
-			[process.env.CLOUDFLARE_ACCOUNT_ID as string]: "CLOUDFLARE_ACCOUNT_ID",
-		})`
-		exits(1) {
-	  	$ ${RUN} r2 object put ${`${bucketName}/testr2`} --file test-r2.txt --content-type text/html
-		}
-	`;
-		expect(stdout).toMatchInlineSnapshot(`
-			"Creating object \\"testr2\\" in bucket \\"wrangler-smoke-test-bucket\\".
-
-			If you think this is a bug then please create an issue at https://github.com/cloudflare/workers-sdk/issues/new/choose"
-		`);
-		expect(stderr).toMatchInlineSnapshot(`
-			"X [ERROR] Failed to fetch /accounts/CLOUDFLARE_ACCOUNT_ID/r2/buckets/wrangler-smoke-test-bucket/objects/testr2 - 404: Not Found);
-
-			"
-		`);
+		const output = await helper.run(
+			`wrangler r2 object put ${bucketName}/testr2 --file test-r2.txt --content-type text/html`
+		);
+		expect(output.stderr).toContain("The specified bucket does not exist");
 	});
 });

@@ -1,9 +1,10 @@
+import { expect, test } from "vitest";
+import { parseRedirects } from "../..//metadata-generator/parseRedirects";
+
 // Snapshot values
 const maxDynamicRedirectRules = 100;
 const maxLineLength = 2000;
 const maxStaticRedirectRules = 2000;
-
-import { parseRedirects } from "../..//metadata-generator/parseRedirects";
 
 test("parseRedirects should reject malformed lines", () => {
 	const input = `

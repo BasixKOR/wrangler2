@@ -1,22 +1,133 @@
 import path from "node:path";
+import readline from "node:readline";
+import { parse as dotenvParse } from "dotenv";
+import { FormData } from "undici";
 import { fetchResult } from "../cfetch";
-import { readConfig } from "../config";
-import { createWorkerUploadForm } from "../create-worker-upload-form";
+import { configFileName, readConfig } from "../config";
+import { createWorkerUploadForm } from "../deployment-bundle/create-worker-upload-form";
 import { confirm, prompt } from "../dialogs";
-import {
-	getLegacyScriptName,
-	isLegacyEnv,
-	printWranglerBanner,
-} from "../index";
+import { FatalError, UserError } from "../errors";
 import { logger } from "../logger";
 import * as metrics from "../metrics";
-import { parseJSON, readFileSync } from "../parse";
+import { APIError, parseJSON, readFileSync } from "../parse";
 import { requireAuth } from "../user";
-
+import { getLegacyScriptName } from "../utils/getLegacyScriptName";
+import { isLegacyEnv } from "../utils/isLegacyEnv";
+import { readFromStdin, trimTrailingWhitespace } from "../utils/std";
+import { printWranglerBanner } from "../wrangler-banner";
+import type { Config } from "../config";
+import type { WorkerMetadataBinding } from "../deployment-bundle/create-worker-upload-form";
 import type {
 	CommonYargsArgv,
 	StrictYargsOptionsToInterface,
 } from "../yargs-types";
+
+export const VERSION_NOT_DEPLOYED_ERR_CODE = 10215;
+
+type SecretBindingUpload = {
+	type: "secret_text";
+	name: string;
+	text: string;
+};
+
+type InheritBindingUpload = {
+	type: (WorkerMetadataBinding | SecretBindingRedacted)["type"];
+	name: string;
+};
+
+type SecretBindingRedacted = Omit<SecretBindingUpload, "text">;
+
+function isMissingWorkerError(e: unknown): e is { code: 10007 } {
+	return (
+		typeof e === "object" &&
+		e !== null &&
+		(e as { code: number }).code === 10007
+	);
+}
+
+async function createDraftWorker({
+	config,
+	args,
+	accountId,
+	scriptName,
+}: {
+	config: Config;
+	args: { env?: string; name?: string };
+	accountId: string;
+	scriptName: string;
+}) {
+	const confirmation = await confirm(
+		`There doesn't seem to be a Worker called "${scriptName}". Do you want to create a new Worker with that name and add secrets to it?`,
+		// we want to default to true in non-interactive/CI contexts to preserve existing behaviour
+		{ defaultValue: true, fallbackValue: true }
+	);
+	if (!confirmation) {
+		logger.log("Aborting. No secrets added.");
+		return null;
+	} else {
+		logger.log(`🌀 Creating new Worker "${scriptName}"...`);
+	}
+	await fetchResult(
+		!isLegacyEnv(config) && args.env
+			? `/accounts/${accountId}/workers/services/${scriptName}/environments/${args.env}`
+			: `/accounts/${accountId}/workers/scripts/${scriptName}`,
+		{
+			method: "PUT",
+			body: createWorkerUploadForm({
+				name: scriptName,
+				main: {
+					name: scriptName,
+					filePath: undefined,
+					content: `export default { fetch() {} }`,
+					type: "esm",
+				},
+				bindings: {
+					kv_namespaces: [],
+					send_email: [],
+					vars: {},
+					durable_objects: { bindings: [] },
+					workflows: [],
+					queues: [],
+					r2_buckets: [],
+					d1_databases: [],
+					vectorize: [],
+					hyperdrive: [],
+					services: [],
+					analytics_engine_datasets: [],
+					wasm_modules: {},
+					browser: undefined,
+					ai: undefined,
+					version_metadata: undefined,
+					text_blobs: {},
+					data_blobs: {},
+					dispatch_namespaces: [],
+					mtls_certificates: [],
+					pipelines: [],
+					logfwdr: { bindings: [] },
+					assets: undefined,
+					unsafe: {
+						bindings: undefined,
+						metadata: undefined,
+						capnp: undefined,
+					},
+				},
+				modules: [],
+				migrations: undefined,
+				compatibility_date: undefined,
+				compatibility_flags: undefined,
+				keepVars: false, // this doesn't matter since it's a new script anyway
+				keepSecrets: false, // this doesn't matter since it's a new script anyway
+				logpush: false,
+				sourceMaps: undefined,
+				placement: undefined,
+				tail_consumers: undefined,
+				limits: undefined,
+				assets: undefined,
+				observability: undefined,
+			}),
+		}
+	);
+}
 
 export const secret = (secretYargs: CommonYargsArgv) => {
 	return secretYargs
@@ -42,12 +153,18 @@ export const secret = (secretYargs: CommonYargsArgv) => {
 			},
 			async (args) => {
 				await printWranglerBanner();
-				const config = readConfig(args.config, args);
+				const config = readConfig(args);
+				if (config.pages_build_output_dir) {
+					throw new UserError(
+						"It looks like you've run a Workers-specific command in a Pages project.\n" +
+							"For Pages, please run `wrangler pages secret put` instead."
+					);
+				}
 
 				const scriptName = getLegacyScriptName(args, config);
 				if (!scriptName) {
-					throw new Error(
-						"Required Worker name missing. Please specify the Worker name in wrangler.toml, or pass it as an argument with `--name <worker-name>`"
+					throw new UserError(
+						`Required Worker name missing. Please specify the Worker name in your ${configFileName(config.configPath)} file, or pass it as an argument with \`--name <worker-name>\``
 					);
 				}
 
@@ -72,79 +189,51 @@ export const secret = (secretYargs: CommonYargsArgv) => {
 							? `/accounts/${accountId}/workers/scripts/${scriptName}/secrets`
 							: `/accounts/${accountId}/workers/services/${scriptName}/environments/${args.env}/secrets`;
 
-					return await fetchResult(url, {
-						method: "PUT",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							name: args.key,
-							text: secretValue,
-							type: "secret_text",
-						}),
-					});
-				}
-
-				const createDraftWorker = async () => {
-					// TODO: log a warning
-					await fetchResult(
-						!isLegacyEnv(config) && args.env
-							? `/accounts/${accountId}/workers/services/${scriptName}/environments/${args.env}`
-							: `/accounts/${accountId}/workers/scripts/${scriptName}`,
-						{
+					try {
+						return await fetchResult(url, {
 							method: "PUT",
-							body: createWorkerUploadForm({
-								name: scriptName,
-								main: {
-									name: scriptName,
-									content: `export default { fetch() {} }`,
-									type: "esm",
-								},
-								bindings: {
-									kv_namespaces: [],
-									send_email: [],
-									vars: {},
-									durable_objects: { bindings: [] },
-									queues: [],
-									r2_buckets: [],
-									d1_databases: [],
-									services: [],
-									analytics_engine_datasets: [],
-									wasm_modules: {},
-									text_blobs: {},
-									data_blobs: {},
-									dispatch_namespaces: [],
-									mtls_certificates: [],
-									logfwdr: { schema: undefined, bindings: [] },
-									unsafe: { bindings: undefined, metadata: undefined },
-								},
-								modules: [],
-								migrations: undefined,
-								compatibility_date: undefined,
-								compatibility_flags: undefined,
-								usage_model: undefined,
-								keepVars: false, // this doesn't matter since it's a new script anyway
-								logpush: false,
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								name: args.key,
+								text: secretValue,
+								type: "secret_text",
 							}),
+						});
+					} catch (e) {
+						if (
+							e instanceof APIError &&
+							e.code === VERSION_NOT_DEPLOYED_ERR_CODE
+						) {
+							throw new UserError(
+								"Secret edit failed. You attempted to modify a secret, but the latest version of your Worker isn't currently deployed. " +
+									"Please ensure that the latest version of your Worker is fully deployed " +
+									"(wrangler versions deploy) before modifying secrets. " +
+									"Alternatively, you can use the Cloudflare dashboard to modify secrets and deploy the version." +
+									"\n\nNote: This limitation will be addressed in an upcoming release."
+							);
+						} else {
+							throw e;
 						}
-					);
-				};
-
-				function isMissingWorkerError(e: unknown): e is { code: 10007 } {
-					return (
-						typeof e === "object" &&
-						e !== null &&
-						(e as { code: number }).code === 10007
-					);
+					}
 				}
 
 				try {
 					await submitSecret();
-					await metrics.sendMetricsEvent("create encrypted variable", {
+					metrics.sendMetricsEvent("create encrypted variable", {
 						sendMetrics: config.send_metrics,
 					});
 				} catch (e) {
 					if (isMissingWorkerError(e)) {
 						// create a draft worker and try again
-						await createDraftWorker();
+						const result = await createDraftWorker({
+							config,
+							args,
+							accountId,
+							scriptName,
+						});
+						if (result === null) {
+							return;
+						}
 						await submitSecret();
 						// TODO: delete the draft worker if this failed too?
 					} else {
@@ -159,7 +248,6 @@ export const secret = (secretYargs: CommonYargsArgv) => {
 			"delete <key>",
 			"Delete a secret variable from a Worker",
 			async (yargs) => {
-				await printWranglerBanner();
 				return yargs
 					.positional("key", {
 						describe: "The variable name to be accessible in the Worker",
@@ -172,12 +260,19 @@ export const secret = (secretYargs: CommonYargsArgv) => {
 					});
 			},
 			async (args) => {
-				const config = readConfig(args.config, args);
+				await printWranglerBanner();
+				const config = readConfig(args);
+				if (config.pages_build_output_dir) {
+					throw new UserError(
+						"It looks like you've run a Workers-specific command in a Pages project.\n" +
+							"For Pages, please run `wrangler pages secret delete` instead."
+					);
+				}
 
 				const scriptName = getLegacyScriptName(args, config);
 				if (!scriptName) {
-					throw new Error(
-						"Required Worker name missing. Please specify the Worker name in wrangler.toml, or pass it as an argument with `--name <worker-name>`"
+					throw new UserError(
+						`Required Worker name missing. Please specify the Worker name in your ${configFileName(config.configPath)} file, or pass it as an argument with \`--name <worker-name>\``
 					);
 				}
 
@@ -204,7 +299,7 @@ export const secret = (secretYargs: CommonYargsArgv) => {
 							: `/accounts/${accountId}/workers/services/${scriptName}/environments/${args.env}/secrets`;
 
 					await fetchResult(`${url}/${args.key}`, { method: "DELETE" });
-					await metrics.sendMetricsEvent("delete encrypted variable", {
+					metrics.sendMetricsEvent("delete encrypted variable", {
 						sendMetrics: config.send_metrics,
 					});
 					logger.log(`✨ Success! Deleted secret ${args.key}`);
@@ -215,19 +310,31 @@ export const secret = (secretYargs: CommonYargsArgv) => {
 			"list",
 			"List all secrets for a Worker",
 			(yargs) => {
-				return yargs.option("name", {
-					describe: "Name of the Worker",
-					type: "string",
-					requiresArg: true,
-				});
+				return yargs
+					.option("name", {
+						describe: "Name of the Worker",
+						type: "string",
+						requiresArg: true,
+					})
+					.option("format", {
+						default: "json",
+						choices: ["json", "pretty"],
+						describe: "The format to print the secrets in",
+					});
 			},
 			async (args) => {
-				const config = readConfig(args.config, args);
+				const config = readConfig(args);
+				if (config.pages_build_output_dir) {
+					throw new UserError(
+						"It looks like you've run a Workers-specific command in a Pages project.\n" +
+							"For Pages, please run `wrangler pages secret list` instead."
+					);
+				}
 
 				const scriptName = getLegacyScriptName(args, config);
 				if (!scriptName) {
-					throw new Error(
-						"Required Worker name missing. Please specify the Worker name in wrangler.toml, or pass it as an argument with `--name <worker-name>`"
+					throw new UserError(
+						`Required Worker name missing. Please specify the Worker name in your ${configFileName(config.configPath)} file, or pass it as an argument with \`--name <worker-name>\``
 					);
 				}
 
@@ -238,20 +345,39 @@ export const secret = (secretYargs: CommonYargsArgv) => {
 						? `/accounts/${accountId}/workers/scripts/${scriptName}/secrets`
 						: `/accounts/${accountId}/workers/services/${scriptName}/environments/${args.env}/secrets`;
 
-				logger.log(JSON.stringify(await fetchResult(url), null, "  "));
-				await metrics.sendMetricsEvent("list encrypted variables", {
+				const secrets =
+					await fetchResult<{ name: string; type: string }[]>(url);
+
+				if (args.pretty) {
+					for (const workerSecret of secrets) {
+						logger.log(`Secret Name: ${workerSecret.name}\n`);
+					}
+				} else {
+					logger.log(JSON.stringify(secrets, null, "  "));
+				}
+
+				metrics.sendMetricsEvent("list encrypted variables", {
 					sendMetrics: config.send_metrics,
 				});
 			}
+		)
+		.command(
+			"bulk [json]",
+			"Bulk upload secrets for a Worker",
+			secretBulkOptions,
+			secretBulkHandler
 		);
 };
 
+// *** Secret Bulk Section Below ***
+/**
+ * @description Options for the `secret bulk` command.
+ */
 export const secretBulkOptions = (yargs: CommonYargsArgv) => {
 	return yargs
 		.positional("json", {
-			describe: `The JSON file of key-value pairs to upload, in form {"key": value, ...}`,
+			describe: `The file of key-value pairs to upload, as JSON in form {"key": value, ...} or .dev.vars file in the form KEY=VALUE`,
 			type: "string",
-			demandOption: "true",
 		})
 		.option("name", {
 			describe: "Name of the Worker",
@@ -260,58 +386,31 @@ export const secretBulkOptions = (yargs: CommonYargsArgv) => {
 		});
 };
 
-/**
- * Remove trailing white space from inputs.
- * Matching Wrangler legacy behavior with handling inputs
- */
-function trimTrailingWhitespace(str: string) {
-	return str.trimEnd();
-}
-
-/**
- * Get a promise to the streamed input from stdin.
- *
- * This function can be used to grab the incoming stream of data from, say,
- * piping the output of another process into the wrangler process.
- */
-function readFromStdin(): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const stdin = process.stdin;
-		const chunks: string[] = [];
-
-		// When there is data ready to be read, the `readable` event will be triggered.
-		// In the handler for `readable` we call `read()` over and over until all the available data has been read.
-		stdin.on("readable", () => {
-			let chunk;
-			while (null !== (chunk = stdin.read())) {
-				chunks.push(chunk);
-			}
-		});
-
-		// When the streamed data is complete the `end` event will be triggered.
-		// In the handler for `end` we join the chunks together and resolve the promise.
-		stdin.on("end", () => {
-			resolve(chunks.join(""));
-		});
-
-		// If there is an `error` event then the handler will reject the promise.
-		stdin.on("error", (err) => {
-			reject(err);
-		});
-	});
-}
-
 type SecretBulkArgs = StrictYargsOptionsToInterface<typeof secretBulkOptions>;
 
 export const secretBulkHandler = async (secretBulkArgs: SecretBulkArgs) => {
 	await printWranglerBanner();
-	const config = readConfig(secretBulkArgs.config, secretBulkArgs);
+	const config = readConfig(secretBulkArgs);
+	if (config.pages_build_output_dir) {
+		throw new UserError(
+			"It looks like you've run a Workers-specific command in a Pages project.\n" +
+				"For Pages, please run `wrangler pages secret bulk` instead."
+		);
+	}
+
+	if (secretBulkArgs._.includes("secret:bulk")) {
+		logger.warn(
+			"`wrangler secret:bulk` is deprecated and will be removed in a future major version.\nPlease use `wrangler secret bulk` instead, which accepts exactly the same arguments."
+		);
+	}
 
 	const scriptName = getLegacyScriptName(secretBulkArgs, config);
 	if (!scriptName) {
-		throw new Error(
-			"Required Worker name missing. Please specify the Worker name in wrangler.toml, or pass it as an argument with `--name <worker-name>`"
+		const error = new UserError(
+			`Required Worker name missing. Please specify the Worker name in your ${configFileName(config.configPath)} file, or pass it as an argument with \`--name <worker-name>\``
 		);
+		logger.error(error.message);
+		throw error;
 	}
 
 	const accountId = await requireAuth(config);
@@ -323,54 +422,161 @@ export const secretBulkHandler = async (secretBulkArgs: SecretBulkArgs) => {
 				: ""
 		}`
 	);
-	const jsonFilePath = path.resolve(secretBulkArgs.json);
-	const content = parseJSON<Record<string, string>>(
-		readFileSync(jsonFilePath),
-		jsonFilePath
-	);
-	for (const key in content) {
-		if (typeof content[key] !== "string") {
-			throw new Error(
-				`The value for ${key} in ${jsonFilePath} is not a string.`
+
+	const content = await parseBulkInputToObject(secretBulkArgs.json);
+
+	if (!content) {
+		return logger.error(`🚨 No content found in file, or piped input.`);
+	}
+
+	function getSettings() {
+		const url =
+			!secretBulkArgs.env || isLegacyEnv(config)
+				? `/accounts/${accountId}/workers/scripts/${scriptName}/settings`
+				: `/accounts/${accountId}/workers/services/${scriptName}/environments/${secretBulkArgs.env}/settings`;
+
+		return fetchResult<{
+			bindings: Array<WorkerMetadataBinding | SecretBindingRedacted>;
+		}>(url);
+	}
+
+	function putBindingsSettings(
+		bindings: Array<SecretBindingUpload | InheritBindingUpload>
+	) {
+		const url =
+			!secretBulkArgs.env || isLegacyEnv(config)
+				? `/accounts/${accountId}/workers/scripts/${scriptName}/settings`
+				: `/accounts/${accountId}/workers/services/${scriptName}/environments/${secretBulkArgs.env}/settings`;
+
+		const data = new FormData();
+		data.set("settings", JSON.stringify({ bindings }));
+		return fetchResult(url, {
+			method: "PATCH",
+			body: data,
+		});
+	}
+
+	let existingBindings: Array<WorkerMetadataBinding | SecretBindingRedacted>;
+	try {
+		const settings = await getSettings();
+		existingBindings = settings.bindings;
+	} catch (e) {
+		if (isMissingWorkerError(e)) {
+			// create a draft worker before patching
+			const result = await createDraftWorker({
+				config,
+				args: secretBulkArgs,
+				accountId,
+				scriptName,
+			});
+			if (result === null) {
+				return;
+			}
+			existingBindings = [];
+		} else {
+			throw e;
+		}
+	}
+	// any existing bindings can be "inherited" from the previous deploy via the PATCH settings api
+	// by just providing the "name" and "type" fields for the binding.
+	// so after fetching the bindings in the script settings, we can map over and just pick out those fields
+	const inheritBindings = existingBindings
+		.filter((binding) => {
+			// secrets that currently exist for the worker but are not provided for bulk update
+			// are inherited over with other binding types
+			return (
+				binding.type !== "secret_text" || content[binding.name] === undefined
+			);
+		})
+		.map((binding) => ({ type: binding.type, name: binding.name }));
+	// secrets to upload are provided as bindings in their full form
+	// so when we PATCH, we patch in [...current bindings, ...updated / new secrets]
+	const upsertBindings: Array<SecretBindingUpload> = Object.entries(
+		content
+	).map(([key, value]) => {
+		return {
+			type: "secret_text",
+			name: key,
+			text: value,
+		};
+	});
+	try {
+		await putBindingsSettings(inheritBindings.concat(upsertBindings));
+		for (const upsertedBinding of upsertBindings) {
+			logger.log(
+				`✨ Successfully created secret for key: ${upsertedBinding.name}`
+			);
+		}
+		logger.log("");
+		logger.log("Finished processing secrets file:");
+		logger.log(`✨ ${upsertBindings.length} secrets successfully uploaded`);
+	} catch (err) {
+		logger.log("");
+		logger.log("Finished processing secrets JSON file:");
+		logger.log(`✨ 0 secrets successfully uploaded`);
+		throw new Error(`🚨 ${upsertBindings.length} secrets failed to upload`);
+	}
+};
+
+export function validateFileSecrets(
+	content: unknown,
+	jsonFilePath: string
+): asserts content is Record<string, string> {
+	if (content === null || typeof content !== "object") {
+		throw new FatalError(
+			`The contents of "${jsonFilePath}" is not valid. It should be a JSON object of string values.`
+		);
+	}
+	const entries = Object.entries(content);
+	for (const [key, value] of entries) {
+		if (typeof value !== "string") {
+			throw new FatalError(
+				`The value for "${key}" in "${jsonFilePath}" is not a "string" instead it is of type "${typeof value}"`
 			);
 		}
 	}
+}
 
-	const url =
-		!secretBulkArgs.env || isLegacyEnv(config)
-			? `/accounts/${accountId}/workers/scripts/${scriptName}/secrets`
-			: `/accounts/${accountId}/workers/services/${scriptName}/environments/${secretBulkArgs.env}/secrets`;
-	// Until we have a bulk route for secrets, we need to make a request for each key/value pair
-	const bulkOutcomes = await Promise.all(
-		Object.entries(content).map(async ([key, value]) => {
-			return fetchResult(url, {
-				method: "PUT",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					name: key,
-					text: value,
-					type: "secret_text",
-				}),
-			})
-				.then(() => {
-					logger.log(`✨ Successfully created secret for key: ${key}`);
-					return true;
-				})
-				.catch((e) => {
-					logger.error(
-						`🚨 Error uploading secret for key: ${key}:
-                ${e.message}`
-					);
-					return false;
-				});
-		})
-	);
-	const successes = bulkOutcomes.filter((outcome) => outcome).length;
-	const failures = bulkOutcomes.length - successes;
-	logger.log("");
-	logger.log("Finished processing secrets JSON file:");
-	logger.log(`✨ ${successes} secrets successfully uploaded`);
-	if (failures > 0) {
-		logger.log(`🚨 ${failures} secrets failed to upload`);
+export async function parseBulkInputToObject(input?: string) {
+	let content: Record<string, string>;
+	if (input) {
+		const jsonFilePath = path.resolve(input);
+		try {
+			const fileContent = readFileSync(jsonFilePath);
+			try {
+				content = parseJSON<Record<string, string>>(fileContent);
+			} catch (e) {
+				content = dotenvParse(fileContent);
+				// dotenvParse does not error unless fileContent is undefined, no keys === error
+				if (Object.keys(content).length === 0) {
+					throw e;
+				}
+			}
+		} catch (e) {
+			throw new FatalError(
+				`The contents of "${input}" is not valid JSON: "${e}"`
+			);
+		}
+		validateFileSecrets(content, input);
+	} else {
+		try {
+			const rl = readline.createInterface({ input: process.stdin });
+			let pipedInput = "";
+			for await (const line of rl) {
+				pipedInput += line;
+			}
+			try {
+				content = parseJSON<Record<string, string>>(pipedInput);
+			} catch (e) {
+				content = dotenvParse(pipedInput);
+				// dotenvParse does not error unless fileContent is undefined, no keys === error
+				if (Object.keys(content).length === 0) {
+					throw e;
+				}
+			}
+		} catch {
+			return;
+		}
 	}
-};
+	return content;
+}

@@ -1,19 +1,26 @@
 {
 	"name": "pages-functions-with-routes-app",
-	"version": "0.0.1",
 	"private": true,
 	"sideEffects": false,
 	"scripts": {
-		"check:type": "tsc && tsc -p tests/tsconfig.json",
-		"dev": "npx wrangler pages dev public --port 8776",
-		"test": "npx vitest",
-		"test:ci": "npx vitest"
+		"check:type": "tsc",
+		"dev": "wrangler pages dev public --port 8776",
+		"test:ci": "vitest run",
+		"test:watch": "vitest",
+		"type:tests": "tsc -p ./tests/tsconfig.json"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^4.20221111.1",
-		"undici": "^5.9.1"
+		"@cloudflare/workers-tsconfig": "workspace:*",
+		"@cloudflare/workers-types": "^4.20250121.0",
+		"typescript": "catalog:default",
+		"undici": "catalog:default",
+		"vitest": "catalog:default",
+		"wrangler": "workspace:*"
 	},
 	"engines": {
 		"node": ">=16.13"
+	},
+	"volta": {
+		"extends": "../../package.json"
 	}
 }

@@ -41,14 +41,14 @@ type EventPluginContext<Env, P extends string, Data, PluginArgs> = {
 declare type PagesFunction<
 	Env = unknown,
 	P extends string = string,
-	Data extends Record<string, unknown> = Record<string, unknown>
+	Data extends Record<string, unknown> = Record<string, unknown>,
 > = (context: EventContext<Env, P, Data>) => Response | Promise<Response>;
 
 declare type PagesPluginFunction<
 	Env = unknown,
 	P extends string = string,
 	Data extends Record<string, unknown> = Record<string, unknown>,
-	PluginArgs = unknown
+	PluginArgs = unknown,
 > = (
 	context: EventPluginContext<Env, P, Data, PluginArgs>
 ) => Response | Promise<Response>;
@@ -122,7 +122,8 @@ function* executeRequest(request: Request, relativePathname: string) {
 export default function (pluginArgs: unknown) {
 	const onRequest: PagesPluginFunction = async (workerContext) => {
 		let { request } = workerContext;
-		const { env, next, data } = workerContext;
+		const { env, next } = workerContext;
+		let { data } = workerContext;
 
 		const url = new URL(request.url);
 		// TODO: Replace this with something actually legible.
@@ -149,7 +150,16 @@ export default function (pluginArgs: unknown) {
 					functionPath: workerContext.functionPath + path,
 					next: pluginNext,
 					params,
-					data,
+					get data() {
+						return data;
+					},
+					set data(value) {
+						if (typeof value !== "object" || value === null) {
+							throw new Error("context.data must be an object");
+						}
+						// user has overriden context.data, so we need to merge it with the existing data
+						data = value;
+					},
 					pluginArgs,
 					env,
 					waitUntil: workerContext.waitUntil.bind(workerContext),

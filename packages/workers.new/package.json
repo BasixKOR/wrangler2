@@ -1,14 +1,27 @@
 {
 	"name": "workers.new",
-	"version": "0.0.0",
+	"version": "0.0.1",
 	"private": true,
 	"scripts": {
-		"deploy": "wrangler publish src/index.ts",
-		"dev": "wrangler dev src/index.ts --local",
-		"test": "vitest"
+		"check:lint": "eslint . --max-warnings=0",
+		"deploy": "CLOUDFLARE_ACCOUNT_ID=$WORKERS_NEW_CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN=$WORKERS_NEW_CLOUDFLARE_API_TOKEN wrangler deploy",
+		"dev": "wrangler dev",
+		"test": "vitest -c tests/vitest.config.mts",
+		"test:ci": "vitest run -c tests/vitest.config.mts"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^3.0.0",
-		"wrangler": "^2.0.0"
+		"@cloudflare/vitest-pool-workers": "workspace:*",
+		"@cloudflare/workers-types": "^4.20250121.0",
+		"@types/node": "catalog:default",
+		"miniflare": "workspace:*",
+		"typescript": "catalog:default",
+		"vitest": "catalog:default",
+		"wrangler": "workspace:*"
+	},
+	"volta": {
+		"extends": "../../package.json"
+	},
+	"workers-sdk": {
+		"deploy": true
 	}
 }

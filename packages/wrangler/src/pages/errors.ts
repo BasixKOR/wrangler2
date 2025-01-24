@@ -1,9 +1,18 @@
+import { UserError } from "../errors";
 import {
-	MAX_FUNCTIONS_ROUTES_RULES,
 	MAX_FUNCTIONS_ROUTES_RULE_LENGTH,
+	MAX_FUNCTIONS_ROUTES_RULES,
 	ROUTES_SPEC_VERSION,
 } from "./constants";
 import { RoutesValidationError } from "./functions/routes-validation";
+
+/**
+ * Error codes returned by requests to Pages APIs
+ */
+export enum ApiErrorCodes {
+	UNKNOWN_ERROR = 8000000,
+	UNAUTHORIZED = 8000013,
+}
 
 /**
  * Exit code for `pages functions build` when no routes are found.
@@ -11,10 +20,22 @@ import { RoutesValidationError } from "./functions/routes-validation";
 export const EXIT_CODE_FUNCTIONS_NO_ROUTES_ERROR = 156;
 export const EXIT_CODE_FUNCTIONS_NOTHING_TO_BUILD_ERROR = 157;
 
+export const EXIT_CODE_NO_CONFIG_FOUND = 158;
+export const EXIT_CODE_INVALID_PAGES_CONFIG = 159;
+
+/**
+ * Pages error when building a script from the functions directory fails
+ */
+export class FunctionsBuildError extends UserError {
+	constructor(message: string) {
+		super(message);
+	}
+}
+
 /**
  * Pages error when no routes are found in the functions directory
  */
-export class FunctionsNoRoutesError extends Error {
+export class FunctionsNoRoutesError extends UserError {
 	constructor(message: string) {
 		super(message);
 	}

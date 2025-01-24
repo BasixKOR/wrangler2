@@ -1,20 +1,22 @@
 import { resolve } from "node:path";
 import { fetch } from "undici";
-import { describe, it, beforeAll, afterAll } from "vitest";
+import { afterAll, beforeAll, describe, it } from "vitest";
 import { runWranglerPagesDev } from "../../shared/src/run-wrangler-long-lived";
 
-describe.concurrent("Pages Functions with custom _routes.json", () => {
-	let ip, port, stop;
+describe("Pages Functions with custom _routes.json", () => {
+	let ip: string, port: number, stop: (() => Promise<unknown>) | undefined;
 
 	beforeAll(async () => {
 		({ ip, port, stop } = await runWranglerPagesDev(
 			resolve(__dirname, ".."),
 			"public",
-			["--port=0"]
+			["--port=0", "--inspector-port=0"]
 		));
 	});
 
-	afterAll(async () => await stop());
+	afterAll(async () => {
+		await stop?.();
+	});
 
 	it("should render static pages", async ({ expect }) => {
 		const response = await fetch(`http://${ip}:${port}/undefined-route`);
@@ -65,5 +67,10 @@ describe.concurrent("Pages Functions with custom _routes.json", () => {
 		response = await fetch(`http://${ip}:${port}/greetings`);
 		text = await response.text();
 		expect(text).toEqual("[/functions/greetings]: Bonjour à tous!");
+
+		// matches /*.* exclude rule
+		response = await fetch(`http://${ip}:${port}/greeting/test.json`);
+		const json = await response.json();
+		expect(json).toEqual({ value: 99 });
 	});
 });

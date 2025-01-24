@@ -1,19 +1,28 @@
-Fixes # [insert GH or internal issue number(s)].
+Fixes #[insert GH or internal issue link(s)].
 
-**What this PR solves / how to test:**
+_Describe your change..._
 
-**Associated docs issue(s)/PR(s):**
+---
 
-- [insert associated docs issue(s)/PR(s)]
+<!--
+Please don't delete the checkboxes <3
+The following selections do not need to be completed if this PR only contains changes to .md files
+-->
 
-**Author has included the following, where applicable:**
+- Tests
+  - [ ] TODO (before merge)
+  - [ ] Tests included
+  - [ ] Tests not necessary because:
+- E2E Tests CI Job required? (Use "e2e" label or ask maintainer to run separately)
+  - [ ] I don't know
+  - [ ] Required
+  - [ ] Not required because:
+- Public documentation
+  - [ ] TODO (before merge)
+  - [ ] Cloudflare docs PR(s): <!--e.g. <https://github.com/cloudflare/cloudflare-docs/pull/>...-->
+  - [ ] Documentation not necessary because:
 
-- [ ] Tests
-- [ ] Changeset ([Changeset guidelines](https://github.com/cloudflare/workers-sdk/blob/main/CONTRIBUTING.md#changesets))
-
-**Reviewer has performed the following, where applicable:**
-
-- [ ] Checked for inclusion of relevant tests
-- [ ] Checked for inclusion of a relevant changeset
-- [ ] Checked for creation of associated docs updates
-- [ ] Manually pulled down the changes and spot-tested
+<!--
+Have you read our [Contributing guide](https://github.com/cloudflare/workers-sdk/blob/main/CONTRIBUTING.md)?
+In particular, for non-trivial changes, please always engage on the issue or create a discussion or feature request issue first before writing your code.
+-->
