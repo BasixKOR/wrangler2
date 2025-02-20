@@ -1,7 +1,8 @@
+import { expect, test } from "vitest";
 import { createMetadataObject } from "../..//metadata-generator/createMetadataObject";
 import type {
-	RedirectRule,
 	HeadersRule,
+	RedirectRule,
 } from "../..//metadata-generator/types";
 
 const homeRedirectRule: RedirectRule = {

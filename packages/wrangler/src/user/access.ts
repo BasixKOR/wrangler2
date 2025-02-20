@@ -1,5 +1,6 @@
 import { spawnSync } from "child_process";
 import { fetch } from "undici";
+import { UserError } from "../errors";
 import { logger } from "../logger";
 
 const cache: Record<string, string> = {};
@@ -51,10 +52,10 @@ export async function getAccessToken(
 	if (cache[domain]) {
 		return cache[domain];
 	}
-	const output = await spawnSync("cloudflared", ["access", "login", domain]);
+	const output = spawnSync("cloudflared", ["access", "login", domain]);
 	if (output.error) {
 		// The cloudflared binary is not installed
-		throw new Error(
+		throw new UserError(
 			"To use Wrangler with Cloudflare Access, please install `cloudflared` from https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation"
 		);
 	}

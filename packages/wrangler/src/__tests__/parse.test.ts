@@ -1,10 +1,10 @@
 import {
 	formatMessage,
-	searchLocation,
 	indexLocation,
 	parseJSON,
-	parseTOML,
 	parseJSONC,
+	parseTOML,
+	searchLocation,
 } from "../parse";
 import type { Message } from "../parse";
 
@@ -128,7 +128,7 @@ describe("parseTOML", () => {
 	it("should fail to parse toml with invalid string", () => {
 		try {
 			parseTOML(`name = 'fail"`);
-			fail("parseTOML did not throw");
+			expect.fail("parseTOML did not throw");
 		} catch (err) {
 			expect({ ...(err as Error) }).toStrictEqual({
 				name: "ParseError",
@@ -142,6 +142,7 @@ describe("parseTOML", () => {
 					lineText: "name = 'fail\"",
 				},
 				notes: [],
+				telemetryMessage: "TOML parse error",
 			});
 		}
 	});
@@ -149,7 +150,7 @@ describe("parseTOML", () => {
 	it("should fail to parse toml with invalid header", () => {
 		try {
 			parseTOML(`\n[name`, "config.toml");
-			fail("parseTOML did not throw");
+			expect.fail("parseTOML did not throw");
 		} catch (err) {
 			expect({ ...(err as Error) }).toStrictEqual({
 				name: "ParseError",
@@ -163,6 +164,7 @@ describe("parseTOML", () => {
 					fileText: "\n[name",
 				},
 				notes: [],
+				telemetryMessage: "TOML parse error",
 			});
 		}
 	});
@@ -217,21 +219,24 @@ describe("parseJSON", () => {
 	it("should fail to parse json with invalid string", () => {
 		try {
 			parseJSON(`\n{\n"version" "1\n}\n`);
-			fail("parseJSON did not throw");
+			expect.fail("parseJSON did not throw");
 		} catch (err) {
-			expect({ ...(err as Error) }).toStrictEqual({
+			const { text, ...serialised } = err as Record<string, unknown>;
+			expect(serialised).toStrictEqual({
 				name: "ParseError",
-				text: "Unexpected string",
 				kind: "error",
 				location: {
 					line: 3,
-					column: 9,
+					column: 10,
+					length: 2,
 					lineText: '"version" "1',
 					file: undefined,
 					fileText: `\n{\n"version" "1\n}\n`,
 				},
 				notes: [],
+				telemetryMessage: "JSON(C) parse error",
 			});
+			expect(text).toEqual("UnexpectedEndOfString");
 		}
 	});
 
@@ -240,20 +245,22 @@ describe("parseJSON", () => {
 			fileText = `{\n\t"a":{\n\t\t"b":{\n\t\t\t"c":[012345]\n}\n}\n}`;
 		try {
 			parseJSON(fileText, file);
-			fail("parseJSON did not throw");
+			expect.fail("parseJSON did not throw");
 		} catch (err) {
 			expect({ ...(err as Error) }).toStrictEqual({
 				name: "ParseError",
-				text: "Unexpected number",
+				text: "CommaExpected",
 				kind: "error",
 				location: {
 					file,
 					fileText,
 					line: 4,
-					column: 8,
+					column: 9,
+					length: 5,
 					lineText: `\t\t\t"c":[012345]`,
 				},
 				notes: [],
+				telemetryMessage: "JSON(C) parse error",
 			});
 		}
 	});
@@ -321,7 +328,7 @@ describe("parseJSONC", () => {
 	it("should fail to parse jsonc with invalid string", () => {
 		try {
 			parseJSONC(`\n{\n"version" "1\n}\n`);
-			fail("parseJSONC did not throw");
+			expect.fail("parseJSONC did not throw");
 		} catch (err) {
 			expect({ ...(err as Error) }).toStrictEqual({
 				name: "ParseError",
@@ -336,6 +343,7 @@ describe("parseJSONC", () => {
 					fileText: `\n{\n"version" "1\n}\n`,
 				},
 				notes: [],
+				telemetryMessage: "JSON(C) parse error",
 			});
 		}
 	});
@@ -345,7 +353,7 @@ describe("parseJSONC", () => {
 			fileText = `{\n\t"a":{\n\t\t"b":{\n\t\t\t"c":[012345]\n}\n}\n}`;
 		try {
 			parseJSONC(fileText, file);
-			fail("parseJSONC did not throw");
+			expect.fail("parseJSONC did not throw");
 		} catch (err) {
 			expect({ ...(err as Error) }).toStrictEqual({
 				name: "ParseError",
@@ -360,6 +368,7 @@ describe("parseJSONC", () => {
 					lineText: `\t\t\t"c":[012345]`,
 				},
 				notes: [],
+				telemetryMessage: "JSON(C) parse error",
 			});
 		}
 	});

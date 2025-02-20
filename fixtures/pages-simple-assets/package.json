@@ -1,20 +1,27 @@
 {
 	"name": "pages-simple-assets",
-	"version": "0.0.0",
 	"private": true,
 	"sideEffects": false,
 	"main": "dist/worker.js",
 	"scripts": {
-		"check:type": "tsc && tsc -p tests/tsconfig.json",
-		"dev": "npx wrangler pages dev public",
-		"test": "npx vitest",
-		"test:ci": "npx vitest"
+		"check:type": "tsc",
+		"dev": "wrangler pages dev public",
+		"test:ci": "vitest run",
+		"test:watch": "vitest",
+		"type:tests": "tsc -p ./tests/tsconfig.json"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^4.20221111.1",
-		"undici": "^5.9.1"
+		"@cloudflare/workers-tsconfig": "workspace:*",
+		"@cloudflare/workers-types": "^4.20250214.0",
+		"typescript": "catalog:default",
+		"undici": "catalog:default",
+		"vitest": "catalog:default",
+		"wrangler": "workspace:*"
 	},
 	"engines": {
 		"node": ">=16.13"
+	},
+	"volta": {
+		"extends": "../../package.json"
 	}
 }

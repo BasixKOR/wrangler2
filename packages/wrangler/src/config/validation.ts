@@ -1,41 +1,74 @@
+import assert from "node:assert";
 import path from "node:path";
 import TOML from "@iarna/toml";
+import { dedent } from "ts-dedent";
+import { UserError } from "../errors";
+import { getFlag } from "../experimental-flags";
+import { friendlyBindingNames } from "../utils/print-bindings";
 import { Diagnostics } from "./diagnostics";
 import {
+	all,
+	appendEnvName,
 	deprecated,
 	experimental,
+	getBindingNames,
 	hasProperty,
 	inheritable,
+	inheritableInLegacyEnvironments,
 	isBoolean,
+	isMutuallyExclusiveWith,
 	isObjectWith,
 	isOneOf,
 	isOptionalProperty,
 	isRequiredProperty,
 	isString,
 	isStringArray,
-	validateAdditionalProperties,
+	isValidDateTimeStringFormat,
+	isValidName,
 	notInheritable,
+	validateAdditionalProperties,
+	validateAtLeastOnePropertyRequired,
 	validateOptionalProperty,
 	validateOptionalTypedArray,
 	validateRequiredProperty,
 	validateTypedArray,
-	all,
-	isMutuallyExclusiveWith,
-	inheritableInLegacyEnvironments,
-	appendEnvName,
-	getBindingNames,
-	isValidName,
 } from "./validation-helpers";
+import { configFileName, formatConfigSnippet } from ".";
+import type {
+	CreateApplicationRequest,
+	UserDeploymentConfiguration,
+} from "../cloudchamber/client";
+import type { CfWorkerInit } from "../deployment-bundle/worker";
 import type { Config, DevConfig, RawConfig, RawDevConfig } from "./config";
 import type {
-	RawEnvironment,
+	Assets,
 	DeprecatedUpload,
+	DispatchNamespaceOutbound,
 	Environment,
+	Observability,
+	RawEnvironment,
 	Rule,
+	TailConsumer,
 } from "./environment";
-import type { ValidatorFn } from "./validation-helpers";
+import type { TypeofType, ValidatorFn } from "./validation-helpers";
 
-const ENGLISH = new Intl.ListFormat("en");
+export type NormalizeAndValidateConfigArgs = {
+	name?: string;
+	env?: string;
+	"legacy-env"?: boolean;
+	// This is not relevant in dev. It's only purpose is loosening Worker name validation when deploying to a dispatch namespace
+	"dispatch-namespace"?: string;
+	remote?: boolean;
+	localProtocol?: string;
+	upstreamProtocol?: string;
+	script?: string;
+};
+
+const ENGLISH = new Intl.ListFormat("en-US");
+
+export function isPagesConfig(rawConfig: RawConfig): boolean {
+	return rawConfig.pages_build_output_dir !== undefined;
+}
 
 /**
  * Validate the given `rawConfig` object that was loaded from `configPath`.
@@ -48,7 +81,8 @@ const ENGLISH = new Intl.ListFormat("en");
 export function normalizeAndValidateConfig(
 	rawConfig: RawConfig,
 	configPath: string | undefined,
-	args: unknown
+	userConfigPath: string | undefined,
+	args: NormalizeAndValidateConfigArgs
 ): {
 	config: Config;
 	diagnostics: Diagnostics;
@@ -110,11 +144,28 @@ export function normalizeAndValidateConfig(
 		"boolean"
 	);
 
+	validateOptionalProperty(
+		diagnostics,
+		"",
+		"pages_build_output_dir",
+		rawConfig.pages_build_output_dir,
+		"string"
+	);
+
+	// Support explicit JSON schema setting
+	validateOptionalProperty(
+		diagnostics,
+		"",
+		"$schema",
+		rawConfig.$schema,
+		"string"
+	);
+
 	// TODO: set the default to false to turn on service environments as the default
 	const isLegacyEnv =
-		(args as { "legacy-env": boolean | undefined })["legacy-env"] ??
-		rawConfig.legacy_env ??
-		true;
+		typeof args["legacy-env"] === "boolean"
+			? args["legacy-env"]
+			: rawConfig.legacy_env ?? true;
 
 	// TODO: remove this once service environments goes GA.
 	if (!isLegacyEnv) {
@@ -123,40 +174,61 @@ export function normalizeAndValidateConfig(
 		);
 	}
 
+	const isDispatchNamespace =
+		typeof args["dispatch-namespace"] === "string" &&
+		args["dispatch-namespace"].trim() !== "";
+
 	const topLevelEnv = normalizeAndValidateEnvironment(
 		diagnostics,
 		configPath,
-		rawConfig
+		rawConfig,
+		isDispatchNamespace
 	);
 
 	//TODO: find a better way to define the type of Args that can be passed to the normalizeAndValidateConfig()
-	const envName = (args as { env: string | undefined }).env;
+	const envName = args.env;
+	assert(envName === undefined || typeof envName === "string");
 
 	let activeEnv = topLevelEnv;
+
 	if (envName !== undefined) {
 		const envDiagnostics = new Diagnostics(
 			`"env.${envName}" environment configuration`
 		);
 		const rawEnv = rawConfig.env?.[envName];
+
+		/**
+		 * If an environment name was specified, and we found corresponding configuration
+		 * for it in the config file, we will use that corresponding environment. If the
+		 * environment name was specified, but no configuration for it was found, we will:
+		 *
+		 * - default to the top-level environment for Pages. For Pages, Wrangler does not
+		 * require both of supported named environments ("preview" or "production") to be
+		 * explicitly defined in the config file. If either`[env.production]` or
+		 * `[env.preview]` is left unspecified, we will use the top-level environment when
+		 * targeting that named Pages environment.
+		 *
+		 * - create a fake active environment with the specified `envName` for Workers.
+		 * This is done to cover any legacy environment cases, where the `envName` is used.
+		 */
 		if (rawEnv !== undefined) {
 			activeEnv = normalizeAndValidateEnvironment(
 				envDiagnostics,
 				configPath,
 				rawEnv,
+				isDispatchNamespace,
 				envName,
 				topLevelEnv,
 				isLegacyEnv,
 				rawConfig
 			);
 			diagnostics.addChild(envDiagnostics);
-		} else {
-			// An environment was specified, but no configuration for it was found.
-			// To cover any legacy environment cases, where the `envName` is used,
-			// Let's create a fake active environment with the specified `envName`.
+		} else if (!isPagesConfig(rawConfig)) {
 			activeEnv = normalizeAndValidateEnvironment(
 				envDiagnostics,
 				configPath,
-				{},
+				topLevelEnv, // in this case reuse the topLevelEnv to ensure that nonInherited fields are not removed
+				isDispatchNamespace,
 				envName,
 				topLevelEnv,
 				isLegacyEnv,
@@ -165,13 +237,13 @@ export function normalizeAndValidateConfig(
 			const envNames = rawConfig.env
 				? `The available configured environment names are: ${JSON.stringify(
 						Object.keys(rawConfig.env)
-				  )}\n`
+					)}\n`
 				: "";
 			const message =
 				`No environment found in configuration with name "${envName}".\n` +
 				`Before using \`--env=${envName}\` there should be an equivalent environment section in the configuration.\n` +
 				`${envNames}\n` +
-				`Consider adding an environment configuration section to the wrangler.toml file:\n` +
+				`Consider adding an environment configuration section to the ${configFileName(configPath)} file:\n` +
 				"```\n[env." +
 				envName +
 				"]\n```\n";
@@ -179,32 +251,46 @@ export function normalizeAndValidateConfig(
 			if (envNames.length > 0) {
 				diagnostics.errors.push(message);
 			} else {
-				// Only warn (rather than error) if there are not actually any environments configured in wrangler.toml.
+				// Only warn (rather than error) if there are not actually any environments configured in the Wrangler configuration file.
 				diagnostics.warnings.push(message);
 			}
 		}
 	}
 
+	deprecated(
+		diagnostics,
+		rawConfig,
+		"legacy_assets",
+		`The \`legacy_assets\` feature has been deprecated. Please use \`assets\` instead.`,
+		false
+	);
+
 	// Process the top-level default environment configuration.
 	const config: Config = {
 		configPath,
+		userConfigPath,
+		topLevelName: rawConfig.name,
+		pages_build_output_dir: normalizeAndValidatePagesBuildOutputDir(
+			configPath,
+			rawConfig.pages_build_output_dir
+		),
 		legacy_env: isLegacyEnv,
 		send_metrics: rawConfig.send_metrics,
 		keep_vars: rawConfig.keep_vars,
 		...activeEnv,
-		dev: normalizeAndValidateDev(diagnostics, rawConfig.dev ?? {}),
-		migrations: normalizeAndValidateMigrations(
-			diagnostics,
-			rawConfig.migrations ?? [],
-			activeEnv.durable_objects
-		),
+		dev: normalizeAndValidateDev(diagnostics, rawConfig.dev ?? {}, args),
 		site: normalizeAndValidateSite(
 			diagnostics,
 			configPath,
 			rawConfig,
 			activeEnv.main
 		),
-		assets: normalizeAndValidateAssets(diagnostics, configPath, rawConfig),
+		legacy_assets: normalizeAndValidateLegacyAssets(
+			diagnostics,
+			configPath,
+			rawConfig
+		),
+		alias: normalizeAndValidateAliases(diagnostics, configPath, rawConfig),
 		wasm_modules: normalizeAndValidateModulePaths(
 			diagnostics,
 			configPath,
@@ -231,12 +317,36 @@ export function normalizeAndValidateConfig(
 		diagnostics,
 		"top-level",
 		Object.keys(rawConfig),
-		[...Object.keys(config), "env"]
+		[...Object.keys(config), "env", "$schema"]
 	);
 
-	experimental(diagnostics, rawConfig, "assets");
+	applyPythonConfig(config, args);
 
 	return { config, diagnostics };
+}
+
+/**
+ * Modifies the provided config to support python workers, if the entrypoint is a .py file
+ */
+function applyPythonConfig(
+	config: Config,
+	args: NormalizeAndValidateConfigArgs
+) {
+	const mainModule = args.script ?? config.main;
+	if (typeof mainModule === "string" && mainModule.endsWith(".py")) {
+		// Workers with a python entrypoint should have bundling turned off, since all of Wrangler's bundling is JS/TS specific
+		config.no_bundle = true;
+
+		// Workers with a python entrypoint need module rules for "*.py". Add one automatically as a DX nicety
+		if (!config.rules.some((rule) => rule.type === "PythonModule")) {
+			config.rules.push({ type: "PythonModule", globs: ["**/*.py"] });
+		}
+		if (!config.compatibility_flags.includes("python_workers")) {
+			throw new UserError(
+				"The `python_workers` compatibility flag is required to use Python."
+			);
+		}
+	}
 }
 
 /**
@@ -311,7 +421,7 @@ function normalizeAndValidateBuild(
 			// - `watch_dir` only matters when `command` is defined, so we apply
 			// a default only when `command` is defined
 			// - `configPath` will always be defined since `build` can only
-			// be configured in `wrangler.toml`, but who knows, that may
+			// be configured in the Wrangler configuration file, but who knows, that may
 			// change in the future, so we do a check anyway
 			command && configPath
 				? Array.isArray(watch_dir)
@@ -320,11 +430,11 @@ function normalizeAndValidateBuild(
 								process.cwd(),
 								path.join(path.dirname(configPath), `${dir}`)
 							)
-					  )
+						)
 					: path.relative(
 							process.cwd(),
 							path.join(path.dirname(configPath), `${watch_dir}`)
-					  )
+						)
 				: watch_dir,
 		cwd,
 		deprecatedUpload,
@@ -379,18 +489,66 @@ function normalizeAndValidateBaseDirField(
 }
 
 /**
+ * Validate the `pages_build_output_dir` field and return the normalized values.
+ */
+function normalizeAndValidatePagesBuildOutputDir(
+	configPath: string | undefined,
+	rawPagesDir: string | undefined
+): string | undefined {
+	const configDir = path.dirname(configPath ?? "wrangler.toml");
+	if (rawPagesDir !== undefined) {
+		if (typeof rawPagesDir === "string") {
+			const directory = path.resolve(configDir);
+			return path.resolve(directory, rawPagesDir);
+		} else {
+			return rawPagesDir;
+		}
+	} else {
+		return;
+	}
+}
+
+/**
  * Validate the `dev` configuration and return the normalized values.
  */
 function normalizeAndValidateDev(
 	diagnostics: Diagnostics,
-	rawDev: RawDevConfig
+	rawDev: RawDevConfig,
+	args: NormalizeAndValidateConfigArgs
 ): DevConfig {
+	assert(typeof args === "object" && args !== null && !Array.isArray(args));
 	const {
-		ip = "0.0.0.0",
+		localProtocol: localProtocolArg,
+		upstreamProtocol: upstreamProtocolArg,
+		remote: remoteArg,
+	} = args;
+	assert(
+		localProtocolArg === undefined ||
+			localProtocolArg === "http" ||
+			localProtocolArg === "https"
+	);
+	assert(
+		upstreamProtocolArg === undefined ||
+			upstreamProtocolArg === "http" ||
+			upstreamProtocolArg === "https"
+	);
+	assert(remoteArg === undefined || typeof remoteArg === "boolean");
+	const {
+		// On Windows, when specifying `localhost` as the socket hostname, `workerd`
+		// will only listen on the IPv4 loopback `127.0.0.1`, not the IPv6 `::1`:
+		// https://github.com/cloudflare/workerd/issues/1408
+		// On Node 17+, `fetch()` will only try to fetch the IPv6 address.
+		// For now, on Windows, we default to listening on IPv4 only and using
+		// `127.0.0.1` when sending control requests to `workerd` (e.g. with the
+		// `ProxyController`).
+		ip = process.platform === "win32" ? "127.0.0.1" : "localhost",
 		port,
 		inspector_port,
-		local_protocol = "http",
-		upstream_protocol = "https",
+		local_protocol = localProtocolArg ?? "http",
+		// In remote mode upstream_protocol must be https, otherwise it defaults to local_protocol.
+		upstream_protocol = upstreamProtocolArg ?? remoteArg
+			? "https"
+			: local_protocol,
 		host,
 		...rest
 	} = rawDev;
@@ -425,116 +583,29 @@ function normalizeAndValidateDev(
 	return { ip, port, inspector_port, local_protocol, upstream_protocol, host };
 }
 
-/**
- * Validate the `migrations` configuration and return the normalized values.
- */
-function normalizeAndValidateMigrations(
+function normalizeAndValidateAssets(
 	diagnostics: Diagnostics,
-	rawMigrations: Config["migrations"],
-	durableObjects: Config["durable_objects"]
-): Config["migrations"] {
-	if (!Array.isArray(rawMigrations)) {
-		diagnostics.errors.push(
-			`The optional "migrations" field should be an array, but got ${JSON.stringify(
-				rawMigrations
-			)}`
+	topLevelEnv: Environment | undefined,
+	rawEnv: RawEnvironment
+): Config["assets"] {
+	if (rawEnv?.assets !== undefined) {
+		deprecated(
+			diagnostics,
+			rawEnv,
+			"assets.experimental_serve_directly",
+			`The "experimental_serve_directly" field is not longer supported. Please use run_worker_first.\nRead more: https://developers.cloudflare.com/workers/static-assets/binding/#run_worker_first`,
+			false // Leave in for the moment, to be removed in a future release
 		);
-		return [];
-	} else {
-		for (let i = 0; i < rawMigrations.length; i++) {
-			const { tag, new_classes, renamed_classes, deleted_classes, ...rest } =
-				rawMigrations[i];
-
-			validateAdditionalProperties(
-				diagnostics,
-				"migrations",
-				Object.keys(rest),
-				[]
-			);
-
-			validateRequiredProperty(
-				diagnostics,
-				`migrations[${i}]`,
-				`tag`,
-				tag,
-				"string"
-			);
-			validateOptionalTypedArray(
-				diagnostics,
-				`migrations[${i}].new_classes`,
-				new_classes,
-				"string"
-			);
-			if (renamed_classes !== undefined) {
-				if (!Array.isArray(renamed_classes)) {
-					diagnostics.errors.push(
-						`Expected "migrations[${i}].renamed_classes" to be an array of "{from: string, to: string}" objects but got ${JSON.stringify(
-							renamed_classes
-						)}.`
-					);
-				} else if (
-					renamed_classes.some(
-						(c) =>
-							typeof c !== "object" ||
-							!isRequiredProperty(c, "from", "string") ||
-							!isRequiredProperty(c, "to", "string")
-					)
-				) {
-					diagnostics.errors.push(
-						`Expected "migrations[${i}].renamed_classes" to be an array of "{from: string, to: string}" objects but got ${JSON.stringify(
-							renamed_classes
-						)}.`
-					);
-				}
-			}
-			validateOptionalTypedArray(
-				diagnostics,
-				`migrations[${i}].deleted_classes`,
-				deleted_classes,
-				"string"
-			);
-		}
-
-		if (
-			Array.isArray(durableObjects?.bindings) &&
-			durableObjects.bindings.length > 0
-		) {
-			// intrinsic [durable_objects] implies [migrations]
-			const exportedDurableObjects = (durableObjects.bindings || []).filter(
-				(binding) => !binding.script_name
-			);
-			if (exportedDurableObjects.length > 0 && rawMigrations.length === 0) {
-				if (
-					!exportedDurableObjects.some(
-						(exportedDurableObject) =>
-							typeof exportedDurableObject.class_name !== "string"
-					)
-				) {
-					const durableObjectClassnames = exportedDurableObjects.map(
-						(durable) => durable.class_name
-					);
-
-					diagnostics.warnings.push(
-						`In wrangler.toml, you have configured [durable_objects] exported by this Worker (${durableObjectClassnames.join(
-							", "
-						)}), but no [migrations] for them. This may not work as expected until you add a [migrations] section to your wrangler.toml. Add this configuration to your wrangler.toml:
-
-  \`\`\`
-  [[migrations]]
-  tag = "v1" # Should be unique for each entry
-  new_classes = [${durableObjectClassnames
-		.map((name) => `"${name}"`)
-		.join(", ")}]
-  \`\`\`
-
-Refer to https://developers.cloudflare.com/workers/learning/using-durable-objects/#durable-object-migrations-in-wranglertoml for more details.`
-					);
-				}
-			}
-		}
-
-		return rawMigrations;
 	}
+
+	return inheritable(
+		diagnostics,
+		topLevelEnv,
+		rawEnv,
+		"assets",
+		validateAssetsConfig,
+		undefined
+	);
 }
 
 /**
@@ -621,19 +692,58 @@ function normalizeAndValidateSite(
 }
 
 /**
- * Validate the `assets` configuration and return normalized values.
+ * Validate the `alias` configuration
  */
-function normalizeAndValidateAssets(
+function normalizeAndValidateAliases(
 	diagnostics: Diagnostics,
 	configPath: string | undefined,
 	rawConfig: RawConfig
-): Config["assets"] {
+): Config["alias"] {
+	if (rawConfig?.alias === undefined) {
+		return undefined;
+	}
+	if (
+		["string", "boolean", "number"].includes(typeof rawConfig?.alias) ||
+		typeof rawConfig?.alias !== "object"
+	) {
+		diagnostics.errors.push(
+			`Expected alias to be an object, but got ${typeof rawConfig?.alias}`
+		);
+		return undefined;
+	}
+
+	let isValid = true;
+	for (const [key, value] of Object.entries(rawConfig?.alias)) {
+		if (typeof value !== "string") {
+			diagnostics.errors.push(
+				`Expected alias["${key}"] to be a string, but got ${typeof value}`
+			);
+			isValid = false;
+		}
+	}
+	if (isValid) {
+		return rawConfig.alias;
+	}
+
+	return;
+}
+
+/**
+ * Validate the `legacy_assets` configuration and return normalized values.
+ */
+function normalizeAndValidateLegacyAssets(
+	diagnostics: Diagnostics,
+	configPath: string | undefined,
+	rawConfig: RawConfig
+): Config["legacy_assets"] {
+	const legacyAssetsConfig = rawConfig["legacy_assets"];
+
 	// Even though the type doesn't say it,
 	// we allow for a string input in the config,
 	// so let's normalise it
-	if (typeof rawConfig?.assets === "string") {
+	if (typeof legacyAssetsConfig === "string") {
 		return {
-			bucket: rawConfig.assets,
+			bucket: legacyAssetsConfig,
 			include: [],
 			exclude: [],
 			browser_TTL: undefined,
@@ -641,13 +751,13 @@ function normalizeAndValidateAssets(
 		};
 	}
 
-	if (rawConfig?.assets === undefined) {
+	if (legacyAssetsConfig === undefined) {
 		return undefined;
 	}
 
-	if (typeof rawConfig.assets !== "object") {
+	if (typeof legacyAssetsConfig !== "object") {
 		diagnostics.errors.push(
-			`Expected the \`assets\` field to be a string or an object, but got ${typeof rawConfig.assets}.`
+			`Expected the \`legacy_assets\` field to be a string or an object, but got ${typeof legacyAssetsConfig}.`
 		);
 		return undefined;
 	}
@@ -659,17 +769,28 @@ function normalizeAndValidateAssets(
 		browser_TTL,
 		serve_single_page_app,
 		...rest
-	} = rawConfig.assets;
+	} = legacyAssetsConfig;
 
-	validateAdditionalProperties(diagnostics, "assets", Object.keys(rest), []);
+	validateAdditionalProperties(
+		diagnostics,
+		"legacy_assets",
+		Object.keys(rest),
+		[]
+	);
 
-	validateRequiredProperty(diagnostics, "assets", "bucket", bucket, "string");
-	validateTypedArray(diagnostics, "assets.include", include, "string");
-	validateTypedArray(diagnostics, "assets.exclude", exclude, "string");
+	validateRequiredProperty(
+		diagnostics,
+		"legacy_assets",
+		"bucket",
+		bucket,
+		"string"
+	);
+	validateTypedArray(diagnostics, `legacy_assets.include`, include, "string");
+	validateTypedArray(diagnostics, `legacy_assets.exclude`, exclude, "string");
 
 	validateOptionalProperty(
 		diagnostics,
-		"assets",
+		"legacy_assets",
 		"browser_TTL",
 		browser_TTL,
 		"number"
@@ -677,7 +798,7 @@ function normalizeAndValidateAssets(
 
 	validateOptionalProperty(
 		diagnostics,
-		"assets",
+		"legacy_assets",
 		"serve_single_page_app",
 		serve_single_page_app,
 		"boolean"
@@ -713,7 +834,7 @@ function normalizeAndValidateModulePaths(
 					? path.relative(
 							process.cwd(),
 							path.join(path.dirname(configPath), filePath)
-					  )
+						)
 					: filePath;
 			}
 		}
@@ -873,13 +994,108 @@ function validateRoutes(
 	);
 }
 
+function normalizeAndValidatePlacement(
+	diagnostics: Diagnostics,
+	topLevelEnv: Environment | undefined,
+	rawEnv: RawEnvironment
+): Config["placement"] {
+	if (rawEnv.placement) {
+		validateRequiredProperty(
+			diagnostics,
+			"placement",
+			"mode",
+			rawEnv.placement.mode,
+			"string",
+			["off", "smart"]
+		);
+		validateOptionalProperty(
+			diagnostics,
+			"placement",
+			"hint",
+			rawEnv.placement.hint,
+			"string"
+		);
+		if (rawEnv.placement.hint && rawEnv.placement.mode !== "smart") {
+			diagnostics.errors.push(
+				`"placement.hint" cannot be set if "placement.mode" is not "smart"`
+			);
+		}
+	}
+
+	return inheritable(
+		diagnostics,
+		topLevelEnv,
+		rawEnv,
+		"placement",
+		() => true,
+		undefined
+	);
+}
+
+function validateTailConsumer(
+	diagnostics: Diagnostics,
+	field: string,
+	value: TailConsumer
+) {
+	if (typeof value !== "object" || value === null) {
+		diagnostics.errors.push(
+			`"${field}" should be an object but got ${JSON.stringify(value)}.`
+		);
+		return false;
+	}
+
+	let isValid = true;
+
+	isValid =
+		isValid &&
+		validateRequiredProperty(
+			diagnostics,
+			field,
+			"service",
+			value.service,
+			"string"
+		);
+	isValid =
+		isValid &&
+		validateOptionalProperty(
+			diagnostics,
+			field,
+			"environment",
+			value.environment,
+			"string"
+		);
+
+	return isValid;
+}
+
+const validateTailConsumers: ValidatorFn = (diagnostics, field, value) => {
+	if (!value) {
+		return true;
+	}
+	if (!Array.isArray(value)) {
+		diagnostics.errors.push(
+			`Expected "${field}" to be an array but got ${JSON.stringify(value)}.`
+		);
+		return false;
+	}
+
+	let isValid = true;
+	for (let i = 0; i < value.length; i++) {
+		isValid =
+			validateTailConsumer(diagnostics, `${field}[${i}]`, value[i]) && isValid;
+	}
+
+	return isValid;
+};
+
 /**
  * Validate top-level environment configuration and return the normalized values.
  */
 function normalizeAndValidateEnvironment(
 	diagnostics: Diagnostics,
 	configPath: string | undefined,
-	topLevelEnv: RawEnvironment
+	topLevelEnv: RawEnvironment,
+	isDispatchNamespace: boolean
 ): Environment;
 /**
  * Validate the named environment configuration and return the normalized values.
@@ -888,15 +1104,30 @@ function normalizeAndValidateEnvironment(
 	diagnostics: Diagnostics,
 	configPath: string | undefined,
 	rawEnv: RawEnvironment,
+	isDispatchNamespace: boolean,
 	envName: string,
 	topLevelEnv: Environment,
 	isLegacyEnv: boolean,
 	rawConfig: RawConfig
 ): Environment;
+/**
+ * Validate the named environment configuration and return the normalized values.
+ */
 function normalizeAndValidateEnvironment(
 	diagnostics: Diagnostics,
 	configPath: string | undefined,
 	rawEnv: RawEnvironment,
+	isDispatchNamespace: boolean,
+	envName?: string,
+	topLevelEnv?: Environment,
+	isLegacyEnv?: boolean,
+	rawConfig?: RawConfig
+): Environment;
+function normalizeAndValidateEnvironment(
+	diagnostics: Diagnostics,
+	configPath: string | undefined,
+	rawEnv: RawEnvironment,
+	isDispatchNamespace: boolean,
 	envName = "top level",
 	topLevelEnv?: Environment | undefined,
 	isLegacyEnv?: boolean,
@@ -928,7 +1159,6 @@ function normalizeAndValidateEnvironment(
 	);
 
 	experimental(diagnostics, rawEnv, "unsafe");
-	experimental(diagnostics, rawEnv, "services");
 
 	const route = normalizeAndValidateRoute(diagnostics, topLevelEnv, rawEnv);
 
@@ -954,6 +1184,15 @@ function normalizeAndValidateEnvironment(
 		undefined
 	);
 
+	const preview_urls = inheritable(
+		diagnostics,
+		topLevelEnv,
+		rawEnv,
+		"preview_urls",
+		isBoolean,
+		true
+	);
+
 	const { deprecatedUpload, ...build } = normalizeAndValidateBuild(
 		diagnostics,
 		rawEnv,
@@ -969,7 +1208,7 @@ function normalizeAndValidateEnvironment(
 			topLevelEnv,
 			rawEnv,
 			"compatibility_date",
-			isString,
+			validateCompatibilityDate,
 			undefined
 		),
 		compatibility_flags: inheritable(
@@ -1007,7 +1246,8 @@ function normalizeAndValidateEnvironment(
 			topLevelEnv,
 			rawEnv,
 			deprecatedUpload?.rules,
-			envName
+			envName,
+			configPath
 		),
 		name: inheritableInLegacyEnvironments(
 			diagnostics,
@@ -1015,7 +1255,7 @@ function normalizeAndValidateEnvironment(
 			topLevelEnv,
 			rawEnv,
 			"name",
-			isValidName,
+			isDispatchNamespace ? isString : isValidName,
 			appendEnvName(envName),
 			undefined
 		),
@@ -1030,6 +1270,22 @@ function normalizeAndValidateEnvironment(
 				undefined
 			),
 			deprecatedUpload
+		),
+		find_additional_modules: inheritable(
+			diagnostics,
+			topLevelEnv,
+			rawEnv,
+			"find_additional_modules",
+			isBoolean,
+			undefined
+		),
+		preserve_file_names: inheritable(
+			diagnostics,
+			topLevelEnv,
+			rawEnv,
+			"preserve_file_names",
+			isBoolean,
+			undefined
 		),
 		base_dir: normalizeAndValidateBaseDirField(
 			configPath,
@@ -1052,6 +1308,7 @@ function normalizeAndValidateEnvironment(
 			isObjectWith("crons"),
 			{ crons: [] }
 		),
+		assets: normalizeAndValidateAssets(diagnostics, topLevelEnv, rawEnv),
 		usage_model: inheritable(
 			diagnostics,
 			topLevelEnv,
@@ -1060,8 +1317,11 @@ function normalizeAndValidateEnvironment(
 			isOneOf("bundled", "unbound"),
 			undefined
 		),
+		limits: normalizeAndValidateLimits(diagnostics, topLevelEnv, rawEnv),
+		placement: normalizeAndValidatePlacement(diagnostics, topLevelEnv, rawEnv),
 		build,
 		workers_dev,
+		preview_urls,
 		// Not inherited fields
 		vars: notInheritable(
 			diagnostics,
@@ -1095,6 +1355,24 @@ function normalizeAndValidateEnvironment(
 				bindings: [],
 			}
 		),
+		workflows: notInheritable(
+			diagnostics,
+			topLevelEnv,
+			rawConfig,
+			rawEnv,
+			envName,
+			"workflows",
+			validateBindingArray(envName, validateWorkflowBinding),
+			[]
+		),
+		migrations: inheritable(
+			diagnostics,
+			topLevelEnv,
+			rawEnv,
+			"migrations",
+			validateMigrations,
+			[]
+		),
 		kv_namespaces: notInheritable(
 			diagnostics,
 			topLevelEnv,
@@ -1104,6 +1382,26 @@ function normalizeAndValidateEnvironment(
 			"kv_namespaces",
 			validateBindingArray(envName, validateKVBinding),
 			[]
+		),
+		cloudchamber: notInheritable(
+			diagnostics,
+			topLevelEnv,
+			rawConfig,
+			rawEnv,
+			envName,
+			"cloudchamber",
+			validateCloudchamberConfig,
+			{}
+		),
+		containers: notInheritable(
+			diagnostics,
+			topLevelEnv,
+			rawConfig,
+			rawEnv,
+			envName,
+			"containers",
+			validateContainerAppConfig,
+			{ app: [] }
 		),
 		send_email: notInheritable(
 			diagnostics,
@@ -1143,6 +1441,26 @@ function normalizeAndValidateEnvironment(
 			envName,
 			"d1_databases",
 			validateBindingArray(envName, validateD1Binding),
+			[]
+		),
+		vectorize: notInheritable(
+			diagnostics,
+			topLevelEnv,
+			rawConfig,
+			rawEnv,
+			envName,
+			"vectorize",
+			validateBindingArray(envName, validateVectorizeBinding),
+			[]
+		),
+		hyperdrive: notInheritable(
+			diagnostics,
+			topLevelEnv,
+			rawConfig,
+			rawEnv,
+			envName,
+			"hyperdrive",
+			validateBindingArray(envName, validateHyperdriveBinding),
 			[]
 		),
 		services: notInheritable(
@@ -1185,16 +1503,15 @@ function normalizeAndValidateEnvironment(
 			validateBindingArray(envName, validateMTlsCertificateBinding),
 			[]
 		),
-		logfwdr: inheritable(
+		tail_consumers: notInheritable(
 			diagnostics,
 			topLevelEnv,
+			rawConfig,
 			rawEnv,
-			"logfwdr",
-			validateBindingsProperty(envName, validateCflogfwdrBinding),
-			{
-				schema: undefined,
-				bindings: [],
-			}
+			envName,
+			"tail_consumers",
+			validateTailConsumers,
+			undefined
 		),
 		unsafe: notInheritable(
 			diagnostics,
@@ -1206,7 +1523,67 @@ function normalizeAndValidateEnvironment(
 			validateUnsafeSettings(envName),
 			{}
 		),
+		browser: notInheritable(
+			diagnostics,
+			topLevelEnv,
+			rawConfig,
+			rawEnv,
+			envName,
+			"browser",
+			validateNamedSimpleBinding(envName),
+			undefined
+		),
+		ai: notInheritable(
+			diagnostics,
+			topLevelEnv,
+			rawConfig,
+			rawEnv,
+			envName,
+			"ai",
+			validateAIBinding(envName),
+			undefined
+		),
+		images: notInheritable(
+			diagnostics,
+			topLevelEnv,
+			rawConfig,
+			rawEnv,
+			envName,
+			"images",
+			validateNamedSimpleBinding(envName),
+			undefined
+		),
+		pipelines: notInheritable(
+			diagnostics,
+			topLevelEnv,
+			rawConfig,
+			rawEnv,
+			envName,
+			"pipelines",
+			validateBindingArray(envName, validatePipelineBinding),
+			[]
+		),
+		version_metadata: notInheritable(
+			diagnostics,
+			topLevelEnv,
+			rawConfig,
+			rawEnv,
+			envName,
+			"version_metadata",
+			validateVersionMetadataBinding(envName),
+			undefined
+		),
 		zone_id: rawEnv.zone_id,
+		logfwdr: inheritable(
+			diagnostics,
+			topLevelEnv,
+			rawEnv,
+			"logfwdr",
+			validateCflogfwdrObject(envName),
+			{
+				bindings: [],
+			}
+		),
 		no_bundle: inheritable(
 			diagnostics,
 			topLevelEnv,
@@ -1247,7 +1624,30 @@ function normalizeAndValidateEnvironment(
 			isBoolean,
 			undefined
 		),
+		upload_source_maps: inheritable(
+			diagnostics,
+			topLevelEnv,
+			rawEnv,
+			"upload_source_maps",
+			isBoolean,
+			undefined
+		),
+		observability: inheritable(
+			diagnostics,
+			topLevelEnv,
+			rawEnv,
+			"observability",
+			validateObservability,
+			undefined
+		),
 	};
+
+	warnIfDurableObjectsHaveNoMigrations(
+		diagnostics,
+		environment.durable_objects,
+		environment.migrations,
+		configPath
+	);
 
 	return environment;
 }
@@ -1271,7 +1671,7 @@ function validateAndNormalizeTsconfig(
 		? path.relative(
 				process.cwd(),
 				path.join(path.dirname(configPath), tsconfig)
-		  )
+			)
 		: tsconfig;
 }
 
@@ -1280,13 +1680,14 @@ const validateAndNormalizeRules = (
 	topLevelEnv: Environment | undefined,
 	rawEnv: RawEnvironment,
 	deprecatedRules: Rule[] | undefined,
-	envName: string
+	envName: string,
+	configPath: string | undefined
 ): Rule[] => {
 	if (topLevelEnv === undefined) {
 		// Only create errors/warnings for the top-level environment
 		if (rawEnv.rules && deprecatedRules) {
 			diagnostics.errors.push(
-				`You cannot configure both [rules] and [build.upload.rules] in your wrangler.toml. Delete the \`build.upload\` section.`
+				`You cannot configure both [rules] and [build.upload.rules] in your ${configFileName(configPath)}. Delete the \`build.upload\` section.`
 			);
 		} else if (deprecatedRules) {
 			diagnostics.warnings.push(
@@ -1549,16 +1950,6 @@ const validateUnsafeSettings =
 			return false;
 		}
 
-		// At least one of bindings and metadata must exist
-		if (!hasProperty(value, "bindings") && !hasProperty(value, "metadata")) {
-			diagnostics.errors.push(
-				`The field "${fieldPath}" should contain at least one of "bindings" or "metadata" properties but got ${JSON.stringify(
-					value
-				)}.`
-			);
-			return false;
-		}
-
 		// unsafe.bindings
 		if (hasProperty(value, "bindings") && value.bindings !== undefined) {
 			const validateBindingsFn = validateBindingsProperty(
@@ -1586,6 +1977,70 @@ const validateUnsafeSettings =
 			);
 			return false;
 		}
+
+		// unsafe.capnp
+		if (hasProperty(value, "capnp") && value.capnp !== undefined) {
+			if (
+				typeof value.capnp !== "object" ||
+				value.capnp === null ||
+				Array.isArray(value.capnp)
+			) {
+				diagnostics.errors.push(
+					`The field "${fieldPath}.capnp" should be an object but got ${JSON.stringify(
+						value.capnp
+					)}.`
+				);
+				return false;
+			}
+
+			// validate whether they have a compiled_schema string. If they do, they should not use base_path or source_schemas
+			if (hasProperty(value.capnp, "compiled_schema")) {
+				if (
+					hasProperty(value.capnp, "base_path") ||
+					hasProperty(value.capnp, "source_schemas")
+				) {
+					diagnostics.errors.push(
+						`The field "${fieldPath}.capnp" cannot contain both "compiled_schema" and one of "base_path" or "source_schemas".`
+					);
+					return false;
+				}
+
+				if (typeof value.capnp.compiled_schema !== "string") {
+					diagnostics.errors.push(
+						`The field "${fieldPath}.capnp.compiled_schema", when present, should be a string but got ${JSON.stringify(
+							value.capnp.compiled_schema
+						)}.`
+					);
+					return false;
+				}
+			} else {
+				// they don't have a compiled_schema property, so they must have both base_path and source_schemas
+				if (!isRequiredProperty(value.capnp, "base_path", "string")) {
+					diagnostics.errors.push(
+						`The field "${fieldPath}.capnp.base_path", when present, should be a string but got ${JSON.stringify(
+							value.capnp.base_path
+						)}`
+					);
+				}
+
+				if (
+					!validateTypedArray(
+						diagnostics,
+						`${fieldPath}.capnp.source_schemas`,
+						value.capnp.source_schemas,
+						"string"
+					)
+				) {
+					return false;
+				}
+			}
+		}
+
+		validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+			"bindings",
+			"metadata",
+			"capnp",
+		]);
 
 		return true;
 	};
@@ -1636,8 +2091,51 @@ const validateDurableObjectBinding: ValidatorFn = (
 		isValid = false;
 	}
 
+	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+		"class_name",
+		"environment",
+		"name",
+		"script_name",
+	]);
+
 	return isValid;
 };
+
+/**
+ * Check that the given field is a valid "workflow" binding object.
+ */
+const validateWorkflowBinding: ValidatorFn = (_diagnostics, _field, _value) => {
+	// TODO
+
+	return true;
+};
+
+const validateCflogfwdrObject: (env: string) => ValidatorFn =
+	(envName) => (diagnostics, field, value, topLevelEnv) => {
+		//validate the bindings property first, as this also validates that it's an object, etc.
+		const bindingsValidation = validateBindingsProperty(
+			envName,
+			validateCflogfwdrBinding
+		);
+		if (!bindingsValidation(diagnostics, field, value, topLevelEnv)) {
+			return false;
+		}
+
+		const v = value as {
+			bindings: [];
+			schema: string | undefined;
+		};
+
+		if (v?.schema !== undefined) {
+			// the user should not be using the old schema property, as we've migrated to unsafe.capnp.schema for consistency with the unsafe bindings
+			diagnostics.errors.push(
+				`"${field}" binding "schema" property has been replaced with the "unsafe.capnp" object, which expects a "base_path" and an array of "source_schemas" to compile, or a "compiled_schema" property.`
+			);
+			return false;
+		}
+
+		return true;
+	};
 
 const validateCflogfwdrBinding: ValidatorFn = (diagnostics, field, value) => {
 	if (typeof value !== "object" || value === null) {
@@ -1660,8 +2158,181 @@ const validateCflogfwdrBinding: ValidatorFn = (diagnostics, field, value) => {
 		isValid = false;
 	}
 
+	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+		"destination",
+		"name",
+	]);
+
 	return isValid;
 };
+
+const validateAssetsConfig: ValidatorFn = (diagnostics, field, value) => {
+	if (value === undefined) {
+		return true;
+	}
+
+	if (typeof value !== "object" || value === null) {
+		diagnostics.errors.push(
+			`"${field}" should be an object, but got value ${JSON.stringify(
+				field
+			)} of type ${typeof value}`
+		);
+		return false;
+	}
+
+	let isValid = true;
+
+	// ensure we validate all props before we show the validation errors
+	// this way users have all the necessary info to fix all errors in one go
+	isValid =
+		validateOptionalProperty(
+			diagnostics,
+			field,
+			"directory",
+			(value as Assets).directory,
+			"string"
+		) && isValid;
+
+	isValid =
+		validateOptionalProperty(
+			diagnostics,
+			field,
+			"binding",
+			(value as Assets).binding,
+			"string"
+		) && isValid;
+
+	isValid =
+		validateOptionalProperty(
+			diagnostics,
+			field,
+			"html_handling",
+			(value as Assets).html_handling,
+			"string",
+			[
+				"auto-trailing-slash",
+				"force-trailing-slash",
+				"drop-trailing-slash",
+				"none",
+			]
+		) && isValid;
+
+	isValid =
+		validateOptionalProperty(
+			diagnostics,
+			field,
+			"not_found_handling",
+			(value as Assets).not_found_handling,
+			"string",
+			["single-page-application", "404-page", "none"]
+		) && isValid;
+
+	isValid =
+		validateOptionalProperty(
+			diagnostics,
+			field,
+			"run_worker_first",
+			(value as Assets).run_worker_first,
+			"boolean"
+		) && isValid;
+
+	isValid =
+		validateOptionalProperty(
+			diagnostics,
+			field,
+			"experimental_serve_directly",
+			(value as Assets).experimental_serve_directly,
+			"boolean"
+		) && isValid;
+
+	isValid =
+		validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+			"directory",
+			"binding",
+			"html_handling",
+			"not_found_handling",
+			"run_worker_first",
+			"experimental_serve_directly",
+		]) && isValid;
+
+	return isValid;
+};
+
+const validateNamedSimpleBinding =
+	(envName: string): ValidatorFn =>
+	(diagnostics, field, value, config) => {
+		const fieldPath =
+			config === undefined ? `${field}` : `env.${envName}.${field}`;
+
+		if (typeof value !== "object" || value === null || Array.isArray(value)) {
+			diagnostics.errors.push(
+				`The field "${fieldPath}" should be an object but got ${JSON.stringify(
+					value
+				)}.`
+			);
+			return false;
+		}
+
+		let isValid = true;
+		if (!isRequiredProperty(value, "binding", "string")) {
+			diagnostics.errors.push(`binding should have a string "binding" field.`);
+			isValid = false;
+		}
+
+		validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+			"binding",
+		]);
+
+		return isValid;
+	};
+
+const validateAIBinding =
+	(envName: string): ValidatorFn =>
+	(diagnostics, field, value, config) => {
+		const fieldPath =
+			config === undefined ? `${field}` : `env.${envName}.${field}`;
+
+		if (typeof value !== "object" || value === null || Array.isArray(value)) {
+			diagnostics.errors.push(
+				`The field "${fieldPath}" should be an object but got ${JSON.stringify(
+					value
+				)}.`
+			);
+			return false;
+		}
+
+		let isValid = true;
+		if (!isRequiredProperty(value, "binding", "string")) {
+			diagnostics.errors.push(`binding should have a string "binding" field.`);
+			isValid = false;
+		}
+
+		return isValid;
+	};
+
+const validateVersionMetadataBinding =
+	(envName: string): ValidatorFn =>
+	(diagnostics, field, value, config) => {
+		const fieldPath =
+			config === undefined ? `${field}` : `env.${envName}.${field}`;
+
+		if (typeof value !== "object" || value === null || Array.isArray(value)) {
+			diagnostics.errors.push(
+				`The field "${fieldPath}" should be an object but got ${JSON.stringify(
+					value
+				)}.`
+			);
+			return false;
+		}
+
+		let isValid = true;
+		if (!isRequiredProperty(value, "binding", "string")) {
+			diagnostics.errors.push(`binding should have a string "binding" field.`);
+			isValid = false;
+		}
+
+		return isValid;
+	};
 
 /**
  * Check that the given field is a valid "unsafe" binding object.
@@ -1685,10 +2356,13 @@ const validateUnsafeBinding: ValidatorFn = (diagnostics, field, value) => {
 	if (isRequiredProperty(value, "type", "string")) {
 		const safeBindings = [
 			"plain_text",
+			"secret_text",
 			"json",
 			"wasm_module",
 			"data_blob",
 			"text_blob",
+			"browser",
+			"ai",
 			"kv_namespace",
 			"durable_object_namespace",
 			"d1_database",
@@ -1696,6 +2370,7 @@ const validateUnsafeBinding: ValidatorFn = (diagnostics, field, value) => {
 			"service",
 			"logfwdr",
 			"mtls_certificate",
+			"pipeline",
 		];
 
 		if (safeBindings.includes(value.type)) {
@@ -1703,6 +2378,17 @@ const validateUnsafeBinding: ValidatorFn = (diagnostics, field, value) => {
 				`The binding type "${value.type}" is directly supported by wrangler.\n` +
 					`Consider migrating this unsafe binding to a format for '${value.type}' bindings that is supported by wrangler for optimal support.\n` +
 					"For more details, see https://developers.cloudflare.com/workers/cli-wrangler/configuration"
+			);
+		}
+
+		if (
+			value.type === "metadata" &&
+			isRequiredProperty(value, "name", "string")
+		) {
+			diagnostics.warnings.push(
+				"The deployment object in the metadata binding is now deprecated. " +
+					"Please switch using the version_metadata binding for access to version specific fields: " +
+					"https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata"
 			);
 		}
 	} else {
@@ -1765,6 +2451,118 @@ const validateBindingArray =
 		return isValid;
 	};
 
+const validateContainerAppConfig: ValidatorFn = (
+	diagnostics,
+	_field,
+	value
+) => {
+	if (!value) {
+		diagnostics.errors.push(
+			`"containers" should be an object, but got a falsy value`
+		);
+		return false;
+	}
+
+	if (typeof value !== "object") {
+		diagnostics.errors.push(
+			`"containers" should be an object, but got ${typeof value}`
+		);
+		return false;
+	}
+
+	if (Array.isArray(value)) {
+		diagnostics.errors.push(
+			`"containers" should be an object, but got an array`
+		);
+		return false;
+	}
+
+	if (!("app" in value)) {
+		return true;
+	}
+
+	value = value.app;
+	if (!Array.isArray(value)) {
+		diagnostics.errors.push(
+			`"containers.app" should be an array, but got ${JSON.stringify(value)}`
+		);
+		return false;
+	}
+
+	for (const containerApp of value) {
+		const containerAppOptional =
+			containerApp as Partial<CreateApplicationRequest>;
+		if (!isRequiredProperty(containerAppOptional, "instances", "number")) {
+			diagnostics.errors.push(
+				`"containers.app.instances" should be defined and an integer`
+			);
+		}
+
+		if (!isRequiredProperty(containerAppOptional, "name", "string")) {
+			diagnostics.errors.push(
+				`"containers.app.name" should be defined and a string`
+			);
+		}
+
+		if (!("configuration" in containerAppOptional)) {
+			diagnostics.errors.push(
+				`"containers.app.configuration" should be defined`
+			);
+		} else if (Array.isArray(containerAppOptional.configuration)) {
+			diagnostics.errors.push(
+				`"containers.app.configuration" is defined as an array, it should be an object`
+			);
+		} else if (
+			!isRequiredProperty(
+				containerAppOptional.configuration as UserDeploymentConfiguration,
+				"image",
+				"string"
+			)
+		) {
+			diagnostics.errors.push(
+				`"containers.app.configuration.image" should be defined and a string`
+			);
+		}
+	}
+
+	if (diagnostics.errors.length > 0) {
+		return false;
+	}
+
+	return true;
+};
+
+const validateCloudchamberConfig: ValidatorFn = (diagnostics, field, value) => {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		diagnostics.errors.push(
+			`"cloudchamber" should be an object, but got ${JSON.stringify(value)}`
+		);
+		return false;
+	}
+
+	const optionalAttrsByType = {
+		string: ["memory", "image", "location"],
+		boolean: ["ipv4"],
+		number: ["vcpu"],
+	};
+
+	let isValid = true;
+	Object.entries(optionalAttrsByType).forEach(([attrType, attrNames]) => {
+		attrNames.forEach((key) => {
+			if (!isOptionalProperty(value, key, attrType as TypeofType)) {
+				diagnostics.errors.push(
+					`"${field}" bindings should, optionally, have a ${attrType} "${key}" field but got ${JSON.stringify(
+						value
+					)}.`
+				);
+				isValid = false;
+			}
+		});
+	});
+
+	return isValid;
+};
+
 const validateKVBinding: ValidatorFn = (diagnostics, field, value) => {
 	if (typeof value !== "object" || value === null) {
 		diagnostics.errors.push(
@@ -1785,8 +2583,10 @@ const validateKVBinding: ValidatorFn = (diagnostics, field, value) => {
 		isValid = false;
 	}
 	if (
-		!isRequiredProperty(value, "id", "string") ||
-		(value as { id: string }).id.length === 0
+		getFlag("RESOURCES_PROVISION")
+			? !isOptionalProperty(value, "id", "string") ||
+				(value.id !== undefined && value.id.length === 0)
+			: !isRequiredProperty(value, "id", "string") || value.id.length === 0
 	) {
 		diagnostics.errors.push(
 			`"${field}" bindings should have a string "id" field but got ${JSON.stringify(
@@ -1803,6 +2603,13 @@ const validateKVBinding: ValidatorFn = (diagnostics, field, value) => {
 		);
 		isValid = false;
 	}
+
+	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+		"binding",
+		"id",
+		"preview_id",
+	]);
+
 	return isValid;
 };
 
@@ -1850,6 +2657,14 @@ const validateSendEmailBinding: ValidatorFn = (diagnostics, field, value) => {
 		);
 		isValid = false;
 	}
+
+	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+		"allowed_destination_addresses",
+		"destination_address",
+		"name",
+		"binding",
+	]);
+
 	return isValid;
 };
 
@@ -1865,6 +2680,7 @@ const validateQueueBinding: ValidatorFn = (diagnostics, field, value) => {
 		!validateAdditionalProperties(diagnostics, field, Object.keys(value), [
 			"binding",
 			"queue",
+			"delivery_delay",
 		])
 	) {
 		return false;
@@ -1880,6 +2696,7 @@ const validateQueueBinding: ValidatorFn = (diagnostics, field, value) => {
 		);
 		isValid = false;
 	}
+
 	if (
 		!isRequiredProperty(value, "queue", "string") ||
 		(value as { queue: string }).queue.length === 0
@@ -1891,6 +2708,22 @@ const validateQueueBinding: ValidatorFn = (diagnostics, field, value) => {
 		);
 		isValid = false;
 	}
+
+	const options: {
+		key: string;
+		type: "number" | "string" | "boolean";
+	}[] = [{ key: "delivery_delay", type: "number" }];
+	for (const optionalOpt of options) {
+		if (!isOptionalProperty(value, optionalOpt.key, optionalOpt.type)) {
+			diagnostics.errors.push(
+				`"${field}" should, optionally, have a ${optionalOpt.type} "${
+					optionalOpt.key
+				}" field but got ${JSON.stringify(value)}.`
+			);
+			isValid = false;
+		}
+	}
+
 	return isValid;
 };
 
@@ -1914,8 +2747,11 @@ const validateR2Binding: ValidatorFn = (diagnostics, field, value) => {
 		isValid = false;
 	}
 	if (
-		!isRequiredProperty(value, "bucket_name", "string") ||
-		(value as { bucket_name: string }).bucket_name.length === 0
+		getFlag("RESOURCES_PROVISION")
+			? !isOptionalProperty(value, "bucket_name", "string") ||
+				(value.bucket_name !== undefined && value.bucket_name.length === 0)
+			: !isRequiredProperty(value, "bucket_name", "string") ||
+				value.bucket_name.length === 0
 	) {
 		diagnostics.errors.push(
 			`"${field}" bindings should have a string "bucket_name" field but got ${JSON.stringify(
@@ -1932,6 +2768,22 @@ const validateR2Binding: ValidatorFn = (diagnostics, field, value) => {
 		);
 		isValid = false;
 	}
+	if (!isOptionalProperty(value, "jurisdiction", "string")) {
+		diagnostics.errors.push(
+			`"${field}" bindings should, optionally, have a string "jurisdiction" field but got ${JSON.stringify(
+				value
+			)}.`
+		);
+		isValid = false;
+	}
+
+	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+		"binding",
+		"bucket_name",
+		"preview_bucket_name",
+		"jurisdiction",
+	]);
+
 	return isValid;
 };
 
@@ -1945,6 +2797,7 @@ const validateD1Binding: ValidatorFn = (diagnostics, field, value) => {
 		return false;
 	}
 	let isValid = true;
+
 	// D1 databases must have a binding and either a database_name or database_id.
 	if (!isRequiredProperty(value, "binding", "string")) {
 		diagnostics.errors.push(
@@ -1955,9 +2808,11 @@ const validateD1Binding: ValidatorFn = (diagnostics, field, value) => {
 		isValid = false;
 	}
 	if (
-		// TODO: allow name only, where we look up the ID dynamically
-		// !isOptionalProperty(value, "database_name", "string") &&
-		!isRequiredProperty(value, "database_id", "string")
+		getFlag("RESOURCES_PROVISION")
+			? !isOptionalProperty(value, "database_id", "string")
+			: // TODO: allow name only, where we look up the ID dynamically
+				// !isOptionalProperty(value, "database_name", "string") &&
+				!isRequiredProperty(value, "database_id", "string")
 	) {
 		diagnostics.errors.push(
 			`"${field}" bindings must have a "database_id" field but got ${JSON.stringify(
@@ -1974,11 +2829,88 @@ const validateD1Binding: ValidatorFn = (diagnostics, field, value) => {
 		);
 		isValid = false;
 	}
-	if (isValid && !process.env.NO_D1_WARNING) {
-		diagnostics.warnings.push(
-			"D1 Bindings are currently in alpha to allow the API to evolve before general availability.\nPlease report any issues to https://github.com/cloudflare/workers-sdk/issues/new/choose\nNote: Run this command with the environment variable NO_D1_WARNING=true to hide this message\n\nFor example: `export NO_D1_WARNING=true && wrangler <YOUR COMMAND HERE>`"
+
+	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+		"binding",
+		"database_id",
+		"database_internal_env",
+		"database_name",
+		"migrations_dir",
+		"migrations_table",
+		"preview_database_id",
+	]);
+
+	return isValid;
+};
+
+const validateVectorizeBinding: ValidatorFn = (diagnostics, field, value) => {
+	if (typeof value !== "object" || value === null) {
+		diagnostics.errors.push(
+			`"vectorize" bindings should be objects, but got ${JSON.stringify(value)}`
 		);
+		return false;
 	}
+	let isValid = true;
+	// Vectorize bindings must have a binding and a project.
+	if (!isRequiredProperty(value, "binding", "string")) {
+		diagnostics.errors.push(
+			`"${field}" bindings should have a string "binding" field but got ${JSON.stringify(
+				value
+			)}.`
+		);
+		isValid = false;
+	}
+	if (!isRequiredProperty(value, "index_name", "string")) {
+		diagnostics.errors.push(
+			`"${field}" bindings must have an "index_name" field but got ${JSON.stringify(
+				value
+			)}.`
+		);
+		isValid = false;
+	}
+
+	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+		"binding",
+		"index_name",
+	]);
+
+	return isValid;
+};
+
+const validateHyperdriveBinding: ValidatorFn = (diagnostics, field, value) => {
+	if (typeof value !== "object" || value === null) {
+		diagnostics.errors.push(
+			`"hyperdrive" bindings should be objects, but got ${JSON.stringify(
+				value
+			)}`
+		);
+		return false;
+	}
+	let isValid = true;
+	// Hyperdrive bindings must have a binding and a project.
+	if (!isRequiredProperty(value, "binding", "string")) {
+		diagnostics.errors.push(
+			`"${field}" bindings should have a string "binding" field but got ${JSON.stringify(
+				value
+			)}.`
+		);
+		isValid = false;
+	}
+	if (!isRequiredProperty(value, "id", "string")) {
+		diagnostics.errors.push(
+			`"${field}" bindings must have a "id" field but got ${JSON.stringify(
+				value
+			)}.`
+		);
+		isValid = false;
+	}
+
+	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+		"binding",
+		"id",
+		"localConnectionString",
+	]);
+
 	return isValid;
 };
 
@@ -1992,33 +2924,25 @@ const validateD1Binding: ValidatorFn = (diagnostics, field, value) => {
  */
 const validateBindingsHaveUniqueNames = (
 	diagnostics: Diagnostics,
-	{
-		durable_objects,
-		kv_namespaces,
-		r2_buckets,
-		analytics_engine_datasets,
-		text_blobs,
-		unsafe,
-		vars,
-		define,
-		wasm_modules,
-		data_blobs,
-	}: Partial<Config>
+	config: Partial<Config>
 ): boolean => {
 	let hasDuplicates = false;
 
-	const bindingsGroupedByType = {
-		"Durable Object": getBindingNames(durable_objects),
-		"KV Namespace": getBindingNames(kv_namespaces),
-		"R2 Bucket": getBindingNames(r2_buckets),
-		"Analytics Engine Dataset": getBindingNames(analytics_engine_datasets),
-		"Text Blob": getBindingNames(text_blobs),
-		Unsafe: getBindingNames(unsafe),
-		"Environment Variable": getBindingNames(vars),
-		Definition: getBindingNames(define),
-		"WASM Module": getBindingNames(wasm_modules),
-		"Data Blob": getBindingNames(data_blobs),
-	} as Record<string, string[]>;
+	const bindingNamesArray = Object.entries(friendlyBindingNames) as [
+		keyof CfWorkerInit["bindings"],
+		string,
+	][];
+
+	const bindingsGroupedByType = Object.fromEntries(
+		bindingNamesArray.map(([bindingType, binding]) => [
+			binding,
+			getBindingNames(
+				bindingType === "queues"
+					? config[bindingType]?.producers
+					: config[bindingType]
+			),
+		])
+	);
 
 	const bindingsGroupedByName: Record<string, string[]> = {};
 
@@ -2028,6 +2952,12 @@ const validateBindingsHaveUniqueNames = (
 		for (const bindingName of bindingNames) {
 			if (!(bindingName in bindingsGroupedByName)) {
 				bindingsGroupedByName[bindingName] = [];
+			}
+
+			if (bindingName === "ASSETS" && isPagesConfig(config)) {
+				diagnostics.errors.push(
+					`The name 'ASSETS' is reserved in Pages projects. Please use a different name for your ${bindingType} binding.`
+				);
 			}
 
 			bindingsGroupedByName[bindingName].push(bindingType);
@@ -2092,7 +3022,7 @@ const validateServiceBinding: ValidatorFn = (diagnostics, field, value) => {
 		return false;
 	}
 	let isValid = true;
-	// Service bindings must have a binding, service, and environment.
+	// Service bindings must have a binding, a service, optionally an environment, and, optionally an entrypoint.
 	if (!isRequiredProperty(value, "binding", "string")) {
 		diagnostics.errors.push(
 			`"${field}" bindings should have a string "binding" field but got ${JSON.stringify(
@@ -2112,6 +3042,14 @@ const validateServiceBinding: ValidatorFn = (diagnostics, field, value) => {
 	if (!isOptionalProperty(value, "environment", "string")) {
 		diagnostics.errors.push(
 			`"${field}" bindings should have a string "environment" field but got ${JSON.stringify(
+				value
+			)}.`
+		);
+		isValid = false;
+	}
+	if (!isOptionalProperty(value, "entrypoint", "string")) {
+		diagnostics.errors.push(
+			`"${field}" bindings should have a string "entrypoint" field but got ${JSON.stringify(
 				value
 			)}.`
 		);
@@ -2154,6 +3092,12 @@ const validateAnalyticsEngineBinding: ValidatorFn = (
 		);
 		isValid = false;
 	}
+
+	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+		"binding",
+		"dataset",
+	]);
+
 	return isValid;
 };
 
@@ -2186,8 +3130,65 @@ const validateWorkerNamespaceBinding: ValidatorFn = (
 		);
 		isValid = false;
 	}
+	if (hasProperty(value, "outbound")) {
+		if (
+			!validateWorkerNamespaceOutbound(
+				diagnostics,
+				`${field}.outbound`,
+				value.outbound ?? {}
+			)
+		) {
+			diagnostics.errors.push(`"${field}" has an invalid outbound definition.`);
+			isValid = false;
+		}
+	}
 	return isValid;
 };
+
+function validateWorkerNamespaceOutbound(
+	diagnostics: Diagnostics,
+	field: string,
+	value: DispatchNamespaceOutbound
+): boolean {
+	if (typeof value !== "object" || value === null) {
+		diagnostics.errors.push(
+			`"${field}" should be an object, but got ${JSON.stringify(value)}`
+		);
+		return false;
+	}
+
+	let isValid = true;
+
+	// Namespace outbounds need at least a service name
+	isValid =
+		isValid &&
+		validateRequiredProperty(
+			diagnostics,
+			field,
+			"service",
+			value.service,
+			"string"
+		);
+	isValid =
+		isValid &&
+		validateOptionalProperty(
+			diagnostics,
+			field,
+			"environment",
+			value.environment,
+			"string"
+		);
+	isValid =
+		isValid &&
+		validateOptionalTypedArray(
+			diagnostics,
+			`${field}.parameters`,
+			value.parameters,
+			"string"
+		);
+
+	return isValid;
+}
 
 const validateMTlsCertificateBinding: ValidatorFn = (
 	diagnostics,
@@ -2222,6 +3223,12 @@ const validateMTlsCertificateBinding: ValidatorFn = (
 		);
 		isValid = false;
 	}
+
+	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+		"binding",
+		"certificate_id",
+	]);
+
 	return isValid;
 };
 
@@ -2283,6 +3290,7 @@ function validateQueues(envName: string): ValidatorFn {
 				isValid = false;
 			}
 		}
+
 		return isValid;
 	};
 }
@@ -2299,11 +3307,14 @@ const validateConsumer: ValidatorFn = (diagnostics, field, value, _config) => {
 	if (
 		!validateAdditionalProperties(diagnostics, field, Object.keys(value), [
 			"queue",
+			"type",
 			"max_batch_size",
 			"max_batch_timeout",
 			"max_retries",
 			"dead_letter_queue",
 			"max_concurrency",
+			"visibility_timeout_ms",
+			"retry_delay",
 		])
 	) {
 		isValid = false;
@@ -2321,11 +3332,14 @@ const validateConsumer: ValidatorFn = (diagnostics, field, value, _config) => {
 		key: string;
 		type: "number" | "string" | "boolean";
 	}[] = [
+		{ key: "type", type: "string" },
 		{ key: "max_batch_size", type: "number" },
 		{ key: "max_batch_timeout", type: "number" },
 		{ key: "max_retries", type: "number" },
 		{ key: "dead_letter_queue", type: "string" },
 		{ key: "max_concurrency", type: "number" },
+		{ key: "visibility_timeout_ms", type: "number" },
+		{ key: "retry_delay", type: "number" },
 	];
 	for (const optionalOpt of options) {
 		if (!isOptionalProperty(value, optionalOpt.key, optionalOpt.type)) {
@@ -2340,3 +3354,343 @@ const validateConsumer: ValidatorFn = (diagnostics, field, value, _config) => {
 
 	return isValid;
 };
+
+const validateCompatibilityDate: ValidatorFn = (diagnostics, field, value) => {
+	if (value === undefined) {
+		return true;
+	}
+
+	if (typeof value !== "string") {
+		diagnostics.errors.push(
+			`Expected "${field}" to be of type string but got ${JSON.stringify(value)}.`
+		);
+		return false;
+	}
+
+	return isValidDateTimeStringFormat(diagnostics, field, value);
+};
+
+const validatePipelineBinding: ValidatorFn = (diagnostics, field, value) => {
+	if (typeof value !== "object" || value === null) {
+		diagnostics.errors.push(
+			`"pipeline" bindings should be objects, but got ${JSON.stringify(value)}`
+		);
+		return false;
+	}
+	let isValid = true;
+	// Pipeline bindings must have a binding and a pipeline.
+	if (!isRequiredProperty(value, "binding", "string")) {
+		diagnostics.errors.push(
+			`"${field}" bindings must have a string "binding" field but got ${JSON.stringify(
+				value
+			)}.`
+		);
+		isValid = false;
+	}
+	if (!isRequiredProperty(value, "pipeline", "string")) {
+		diagnostics.errors.push(
+			`"${field}" bindings must have a string "pipeline" field but got ${JSON.stringify(
+				value
+			)}.`
+		);
+		isValid = false;
+	}
+
+	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+		"binding",
+		"pipeline",
+	]);
+
+	return isValid;
+};
+
+function normalizeAndValidateLimits(
+	diagnostics: Diagnostics,
+	topLevelEnv: Environment | undefined,
+	rawEnv: RawEnvironment
+): Config["limits"] {
+	if (rawEnv.limits) {
+		validateRequiredProperty(
+			diagnostics,
+			"limits",
+			"cpu_ms",
+			rawEnv.limits.cpu_ms,
+			"number"
+		);
+	}
+
+	return inheritable(
+		diagnostics,
+		topLevelEnv,
+		rawEnv,
+		"limits",
+		() => true,
+		undefined
+	);
+}
+
+/**
+ * Validate the `migrations` configuration and return the normalized values.
+ */
+const validateMigrations: ValidatorFn = (diagnostics, field, value) => {
+	const rawMigrations = value ?? [];
+	if (!Array.isArray(rawMigrations)) {
+		diagnostics.errors.push(
+			`The optional "${field}" field should be an array, but got ${JSON.stringify(
+				rawMigrations
+			)}`
+		);
+		return false;
+	}
+
+	let valid = true;
+	for (let i = 0; i < rawMigrations.length; i++) {
+		const {
+			tag,
+			new_classes,
+			new_sqlite_classes,
+			renamed_classes,
+			deleted_classes,
+			transferred_classes,
+			...rest
+		} = rawMigrations[i];
+
+		valid =
+			validateAdditionalProperties(
+				diagnostics,
+				"migrations",
+				Object.keys(rest),
+				[]
+			) && valid;
+
+		valid =
+			validateRequiredProperty(
+				diagnostics,
+				`migrations[${i}]`,
+				`tag`,
+				tag,
+				"string"
+			) && valid;
+
+		valid =
+			validateOptionalTypedArray(
+				diagnostics,
+				`migrations[${i}].new_classes`,
+				new_classes,
+				"string"
+			) && valid;
+
+		valid =
+			validateOptionalTypedArray(
+				diagnostics,
+				`migrations[${i}].new_sqlite_classes`,
+				new_sqlite_classes,
+				"string"
+			) && valid;
+
+		if (renamed_classes !== undefined) {
+			if (!Array.isArray(renamed_classes)) {
+				diagnostics.errors.push(
+					`Expected "migrations[${i}].renamed_classes" to be an array of "{from: string, to: string}" objects but got ${JSON.stringify(
+						renamed_classes
+					)}.`
+				);
+				valid = false;
+			} else if (
+				renamed_classes.some(
+					(c) =>
+						typeof c !== "object" ||
+						!isRequiredProperty(c, "from", "string") ||
+						!isRequiredProperty(c, "to", "string")
+				)
+			) {
+				diagnostics.errors.push(
+					`Expected "migrations[${i}].renamed_classes" to be an array of "{from: string, to: string}" objects but got ${JSON.stringify(
+						renamed_classes
+					)}.`
+				);
+				valid = false;
+			}
+		}
+
+		if (transferred_classes !== undefined) {
+			if (!Array.isArray(transferred_classes)) {
+				diagnostics.errors.push(
+					`Expected "migrations[${i}].transferred_classes" to be an array of "{from: string, from_script: string, to: string}" objects but got ${JSON.stringify(
+						transferred_classes
+					)}.`
+				);
+				valid = false;
+			} else if (
+				transferred_classes.some(
+					(c) =>
+						typeof c !== "object" ||
+						!isRequiredProperty(c, "from", "string") ||
+						!isRequiredProperty(c, "from_script", "string") ||
+						!isRequiredProperty(c, "to", "string")
+				)
+			) {
+				diagnostics.errors.push(
+					`Expected "migrations[${i}].transferred_classes" to be an array of "{from: string, from_script: string, to: string}" objects but got ${JSON.stringify(
+						transferred_classes
+					)}.`
+				);
+				valid = false;
+			}
+		}
+
+		valid =
+			validateOptionalTypedArray(
+				diagnostics,
+				`migrations[${i}].deleted_classes`,
+				deleted_classes,
+				"string"
+			) && valid;
+	}
+	return valid;
+};
+
+const validateObservability: ValidatorFn = (diagnostics, field, value) => {
+	if (value === undefined) {
+		return true;
+	}
+
+	if (typeof value !== "object") {
+		diagnostics.errors.push(
+			`"${field}" should be an object but got ${JSON.stringify(value)}.`
+		);
+		return false;
+	}
+
+	const val = value as Observability;
+	let isValid = true;
+
+	/**
+	 * One of observability.enabled or observability.logs.enabled must be defined
+	 */
+	isValid =
+		validateAtLeastOnePropertyRequired(diagnostics, field, [
+			{
+				key: "enabled",
+				value: val.enabled,
+				type: "boolean",
+			},
+			{
+				key: "logs.enabled",
+				value: val.logs?.enabled,
+				type: "boolean",
+			},
+		]) && isValid;
+
+	isValid =
+		validateOptionalProperty(
+			diagnostics,
+			field,
+			"head_sampling_rate",
+			val.head_sampling_rate,
+			"number"
+		) && isValid;
+
+	isValid =
+		validateOptionalProperty(diagnostics, field, "logs", val.logs, "object") &&
+		isValid;
+
+	isValid =
+		validateAdditionalProperties(diagnostics, field, Object.keys(val), [
+			"enabled",
+			"head_sampling_rate",
+			"logs",
+		]) && isValid;
+
+	/**
+	 * Validate the optional nested logs configuration
+	 */
+	if (typeof val.logs === "object") {
+		isValid =
+			validateOptionalProperty(
+				diagnostics,
+				field,
+				"logs.enabled",
+				val.logs.enabled,
+				"boolean"
+			) && isValid;
+
+		isValid =
+			validateOptionalProperty(
+				diagnostics,
+				field,
+				"logs.head_sampling_rate",
+				val.logs.head_sampling_rate,
+				"number"
+			) && isValid;
+
+		isValid =
+			validateOptionalProperty(
+				diagnostics,
+				field,
+				"logs.invocation_logs",
+				val.logs.invocation_logs,
+				"boolean"
+			) && isValid;
+
+		isValid =
+			validateAdditionalProperties(diagnostics, field, Object.keys(val.logs), [
+				"enabled",
+				"head_sampling_rate",
+				"invocation_logs",
+			]) && isValid;
+	}
+
+	const samplingRate = val?.head_sampling_rate;
+
+	if (samplingRate && (samplingRate < 0 || samplingRate > 1)) {
+		diagnostics.errors.push(
+			`"${field}.head_sampling_rate" must be a value between 0 and 1.`
+		);
+	}
+
+	return isValid;
+};
+
+function warnIfDurableObjectsHaveNoMigrations(
+	diagnostics: Diagnostics,
+	durableObjects: Config["durable_objects"],
+	migrations: Config["migrations"],
+	configPath: string | undefined
+) {
+	if (
+		Array.isArray(durableObjects.bindings) &&
+		durableObjects.bindings.length > 0
+	) {
+		// intrinsic [durable_objects] implies [migrations]
+		const exportedDurableObjects = (durableObjects.bindings || []).filter(
+			(binding) => !binding.script_name
+		);
+		if (exportedDurableObjects.length > 0 && migrations.length === 0) {
+			if (
+				!exportedDurableObjects.some(
+					(exportedDurableObject) =>
+						typeof exportedDurableObject.class_name !== "string"
+				)
+			) {
+				const durableObjectClassnames = exportedDurableObjects.map(
+					(durable) => durable.class_name
+				);
+
+				diagnostics.warnings.push(dedent`
+				In your ${configFileName(configPath)} file, you have configured \`durable_objects\` exported by this Worker (${durableObjectClassnames.join(", ")}), but no \`migrations\` for them. This may not work as expected until you add a \`migrations\` section to your ${configFileName(configPath)} file. Add the following configuration:
+
+				\`\`\`
+				${formatConfigSnippet(
+					{
+						migrations: [{ tag: "v1", new_classes: durableObjectClassnames }],
+					},
+					configPath
+				)}
+				\`\`\`
+
+				Refer to https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/ for more details.`);
+			}
+		}
+	}
+}

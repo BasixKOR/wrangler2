@@ -1,25 +1,16 @@
-import fs from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { build } from "esbuild";
+import * as esbuild from "esbuild";
 import { EXTERNAL_DEPENDENCIES } from "./deps";
-import type { WatchMode } from "esbuild";
+import type { BuildContext, BuildOptions, Plugin } from "esbuild";
 
 // the expectation is that this is being run from the project root
 type BuildFlags = {
 	watch?: boolean;
 };
 
-function watchLogger(outputPath: string): WatchMode {
-	return {
-		onRebuild(error, _) {
-			if (error) {
-				console.error(`${outputPath} build failed.\n`, error);
-			} else {
-				console.log(`${outputPath} updated.`);
-			}
-		},
-	};
-}
+const WATCH = process.argv.includes("--watch");
+const TEMPLATES_DIR = path.join(__dirname, "../templates");
 
 async function buildMain(flags: BuildFlags = {}) {
 	const outdir = path.resolve("./wrangler-dist");
@@ -37,13 +28,15 @@ async function buildMain(flags: BuildFlags = {}) {
 		outdir,
 		wranglerPackageDir
 	)}"`;
-	await build({
+
+	const options: BuildOptions = {
 		keepNames: true,
 		entryPoints: ["./src/cli.ts"],
 		bundle: true,
 		outdir,
 		platform: "node",
 		format: "cjs",
+		metafile: true,
 		external: EXTERNAL_DEPENDENCIES,
 		sourcemap: process.env.SOURCEMAPS !== "false",
 		inject: [path.join(__dirname, "../import_meta_url.js")],
@@ -53,62 +46,92 @@ async function buildMain(flags: BuildFlags = {}) {
 			__RELATIVE_PACKAGE_PATH__,
 			"import.meta.url": "import_meta_url",
 			"process.env.NODE_ENV": `'${process.env.NODE_ENV || "production"}'`,
-			...(process.env.SPARROW_SOURCE_KEY
-				? { SPARROW_SOURCE_KEY: `"${process.env.SPARROW_SOURCE_KEY}"` }
-				: {}),
+			"process.env.SPARROW_SOURCE_KEY": JSON.stringify(
+				process.env.SPARROW_SOURCE_KEY ?? ""
+			),
 			...(process.env.ALGOLIA_APP_ID
 				? { ALGOLIA_APP_ID: `"${process.env.ALGOLIA_APP_ID}"` }
 				: {}),
 			...(process.env.ALGOLIA_PUBLIC_KEY
 				? { ALGOLIA_PUBLIC_KEY: `"${process.env.ALGOLIA_PUBLIC_KEY}"` }
 				: {}),
+			...(process.env.SENTRY_DSN
+				? { SENTRY_DSN: `"${process.env.SENTRY_DSN}"` }
+				: {}),
 		},
-		watch: flags.watch ? watchLogger("./wrangler-dist") : false,
-	});
+		plugins: [embedWorkersPlugin],
+	};
 
-	// Copy `yoga-layout` `.wasm` file
-	const yogaLayoutEntrypoint = require.resolve("yoga-layout");
-	const wasmSrc = path.resolve(
-		yogaLayoutEntrypoint,
-		"..",
-		"..",
-		"build",
-		"wasm-sync.wasm"
-	);
-	const wasmDst = path.resolve(outdir, "wasm-sync.wasm");
-	await fs.copyFile(wasmSrc, wasmDst);
+	if (flags.watch) {
+		const ctx = await esbuild.context(options);
+		await ctx.watch();
+	} else {
+		const res = await esbuild.build(options);
+		writeFileSync("metafile.json", JSON.stringify(res.metafile));
+	}
 }
 
-async function buildMiniflareCLI(flags: BuildFlags = {}) {
-	await build({
-		entryPoints: ["./src/miniflare-cli/index.ts"],
-		bundle: true,
-		outfile: "./miniflare-dist/index.mjs",
-		platform: "node",
-		format: "esm",
-		external: EXTERNAL_DEPENDENCIES,
-		sourcemap: process.env.SOURCEMAPS !== "false",
-		define: {
-			"process.env.NODE_ENV": `'${process.env.NODE_ENV || "production"}'`,
-		},
-		watch: flags.watch ? watchLogger("./miniflare-dist/index.mjs") : false,
-	});
-}
+const workersContexts = new Map<string, BuildContext>();
+const embedWorkersPlugin: Plugin = {
+	name: "embed-workers",
+	setup(build) {
+		const namespace = "embed-worker";
+		build.onResolve({ filter: /^worker:/ }, async (args) => {
+			const name = args.path.substring("worker:".length);
+			// Use `build.resolve()` API so Workers can be written as `m?[jt]s` files
+			const result = await build.resolve("./" + name, {
+				kind: "import-statement",
+				resolveDir: TEMPLATES_DIR,
+			});
+			if (result.errors.length > 0) {
+				return { errors: result.errors };
+			}
+			return { path: result.path, namespace };
+		});
+		build.onLoad({ filter: /.*/, namespace }, async (args) => {
+			const ctx =
+				workersContexts.get(args.path) ??
+				(await esbuild.context({
+					platform: "node", // Marks `node:*` imports as external
+					format: "esm",
+					target: "esnext",
+					bundle: true,
+					sourcemap: true,
+					sourcesContent: false,
+					metafile: true,
+					entryPoints: [args.path],
+					outdir: build.initialOptions.outdir,
+				}));
+			const result = await ctx.rebuild();
+			workersContexts.set(args.path, ctx);
+			const watchFiles = Object.keys(result?.metafile?.inputs ?? {});
+			const scriptPath = Object.keys(result?.metafile?.outputs ?? {}).find(
+				(filepath) => filepath.endsWith(".js")
+			);
+
+			const contents = `
+				import path from "node:path";
+				const scriptPath = path.resolve(__dirname, "..", "${scriptPath}");
+				export default scriptPath;
+            `;
+
+			return { contents, loader: "js", watchFiles };
+		});
+	},
+};
 
 async function run() {
 	// main cli
 	await buildMain();
 
-	// custom miniflare cli
-	await buildMiniflareCLI();
-
 	// After built once completely, rerun them both in watch mode
-	if (process.argv.includes("--watch")) {
+	if (WATCH) {
 		console.log("Built. Watching for changes...");
-		await Promise.all([
-			buildMain({ watch: true }),
-			buildMiniflareCLI({ watch: true }),
-		]);
+		await buildMain({ watch: true });
+	} else {
+		for (const ctx of workersContexts.values()) {
+			await ctx.dispose();
+		}
 	}
 }
 

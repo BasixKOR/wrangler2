@@ -1,9 +1,15 @@
-import chalk from "chalk";
 import checkForUpdate from "update-check";
-import pkg from "../package.json";
+import {
+	name as wranglerName,
+	version as wranglerVersion,
+} from "../package.json";
+import type { Result } from "update-check";
 
-export async function updateCheck(): Promise<string> {
-	let update = null;
+async function doUpdateCheck(): Promise<string | undefined> {
+	let update: Result | null = null;
+	// `check-update` only requires the name and version to check. This way we
+	// don't have to bundle the entire `package.json` in the final build.
+	const pkg = { name: wranglerName, version: wranglerVersion };
 	try {
 		// default cache for update check is 1 day
 		update = await checkForUpdate(pkg, {
@@ -12,8 +18,13 @@ export async function updateCheck(): Promise<string> {
 	} catch (err) {
 		// ignore error
 	}
+	return update?.latest;
+}
 
-	if (update) return `(update available ${chalk.green(update.latest)})`;
-
-	return "";
+// Memoise update check promise, so we can call this multiple times as required
+// without having to prop drill the result. It's unlikely to change through the
+// process lifetime.
+let updateCheckPromise: Promise<string | undefined>;
+export function updateCheck(): Promise<string | undefined> {
+	return (updateCheckPromise ??= doUpdateCheck());
 }

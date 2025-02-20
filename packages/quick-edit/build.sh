@@ -1,7 +1,13 @@
 set -eu
 
+# The preinstall script in vscode will fail if npm_execpath is not set by yarn
+# This make sure the env is unset so yarn can set it accordingly
+unset npm_execpath
+# We cannot run yarn without disabling the corepack check as the packageManager field is set to pnpm
+SKIP_YARN_COREPACK_CHECK=0
+
 # Cleanup development symlink to vscode
-rm -f web/vscode
+rm -f web/assets
 
 yarn --cwd ../../vendor/vscode
 
@@ -13,4 +19,4 @@ mv ../../vendor/vscode-web web/assets
 mv web/assets/node_modules web/assets/modules
 
 # Build quick-edit-extension
-npm --prefix web/quick-edit-extension run package-web
+pnpm --filter quick-edit-extension run package-web

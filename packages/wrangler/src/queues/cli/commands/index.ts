@@ -1,9 +1,10 @@
 import { HandleUnauthorizedError } from "../../utils";
-import { consumers } from "./consumer";
-
-import { options as createOptions, handler as createHandler } from "./create";
-import { options as deleteOptions, handler as deleteHandler } from "./delete";
-import { options as listOptions, handler as listHandler } from "./list";
+import { consumers } from "./consumer/index";
+import { handler as createHandler, options as createOptions } from "./create";
+import { handler as deleteHandler, options as deleteOptions } from "./delete";
+import { handler as infoHandler, options as infoOptions } from "./info";
+import { handler as listHandler, options as listOptions } from "./list";
+import { handler as updateHandler, options as updateOptions } from "./update";
 import type { CommonYargsArgv } from "../../../yargs-types";
 
 export function queues(yargs: CommonYargsArgv) {
@@ -17,6 +18,13 @@ export function queues(yargs: CommonYargsArgv) {
 	);
 
 	yargs.command(
+		"update <name>",
+		"Update a Queue",
+		updateOptions,
+		updateHandler
+	);
+
+	yargs.command(
 		"delete <name>",
 		"Delete a Queue",
 		deleteOptions,
@@ -24,8 +32,15 @@ export function queues(yargs: CommonYargsArgv) {
 	);
 
 	yargs.command(
+		"info <name>",
+		"Get Queue information",
+		infoOptions,
+		infoHandler
+	);
+
+	yargs.command(
 		"consumer",
-		"Configure Queue Consumers",
+		"Configure Queue consumers",
 		async (consumersYargs) => {
 			await consumers(consumersYargs);
 		}

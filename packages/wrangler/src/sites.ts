@@ -2,18 +2,21 @@ import assert from "node:assert";
 import { readdir, readFile, stat } from "node:fs/promises";
 import * as path from "node:path";
 import chalk from "chalk";
-import ignore from "ignore";
 import xxhash from "xxhash-wasm";
+import { UserError } from "./errors";
 import {
+	BATCH_KEY_MAX,
 	createKVNamespace,
+	deleteKVBulkKeyValue,
+	formatNumber,
+	getKVKeyValue,
 	listKVNamespaceKeys,
 	listKVNamespaces,
 	putKVBulkKeyValue,
-	deleteKVBulkKeyValue,
-	BATCH_KEY_MAX,
-	formatNumber,
+	putKVKeyValue,
 } from "./kv/helpers";
 import { logger, LOGGER_LEVELS } from "./logger";
+import { createPatternMatcher } from "./utils/filesystem";
 import type { Config } from "./config";
 import type { KeyValue } from "./kv/helpers";
 import type { XXHashAPI } from "xxhash-wasm";
@@ -115,12 +118,13 @@ function pluralise(count: number) {
  * @returns a promise for an object mapping the relative paths of the assets to the key of that
  * asset in the KV namespace.
  */
-export async function syncAssets(
+export async function syncLegacyAssets(
 	accountId: string | undefined,
 	scriptName: string,
-	siteAssets: AssetPaths | undefined,
+	siteAssets: LegacyAssetPaths | undefined,
 	preview: boolean,
-	dryRun: boolean | undefined
+	dryRun: boolean | undefined,
+	oldAssetTTL: number | undefined
 ): Promise<{
 	manifest: { [filePath: string]: string } | undefined;
 	namespace: string | undefined;
@@ -146,6 +150,10 @@ export async function syncAssets(
 	// Get all existing keys in asset namespace
 	logger.info("Fetching list of already uploaded assets...");
 	const namespaceKeysResponse = await listKVNamespaceKeys(accountId, namespace);
+	const namespaceKeyInfoMap = new Map<
+		string,
+		(typeof namespaceKeysResponse)[0]
+	>(namespaceKeysResponse.map((x) => [x.name, x]));
 	const namespaceKeys = new Set(namespaceKeysResponse.map((x) => x.name));
 
 	const assetDirectory = path.join(
@@ -196,7 +204,9 @@ export async function syncAssets(
 	logger.info("Building list of assets to upload...");
 	for await (const absAssetFile of getFilesInFolder(assetDirectory)) {
 		const assetFile = path.relative(assetDirectory, absAssetFile);
-		if (!include(assetFile) || exclude(assetFile)) continue;
+		if (!include(assetFile) || exclude(assetFile)) {
+			continue;
+		}
 
 		const content = await readFile(absAssetFile, "base64");
 		// While KV accepts files that are 25 MiB **before** b64 encoding
@@ -240,10 +250,14 @@ export async function syncAssets(
 		manifest[manifestKey] = assetKey;
 	}
 	// Add the last (potentially only or empty) bucket to the batch
-	if (uploadBucket.length > 0) uploadBuckets.push(uploadBucket);
+	if (uploadBucket.length > 0) {
+		uploadBuckets.push(uploadBucket);
+	}
 
 	for (const key of namespaceKeys) {
-		logDiff(chalk.red(` - ${key} (removing as stale)`));
+		logDiff(
+			chalk.red(` - ${key} (${oldAssetTTL ? "expiring" : "removing"} as stale)`)
+		);
 	}
 
 	// Upload new assets, with 5 concurrent uploaders
@@ -265,7 +279,9 @@ export async function syncAssets(
 			// JavaScript is single(ish)-threaded, so we don't need to worry about
 			// parallel access here.
 			const nextBucket = uploadBuckets.shift();
-			if (nextBucket === undefined) break;
+			if (nextBucket === undefined) {
+				break;
+			}
 
 			// Read all files in the bucket as base64
 			// TODO(perf): consider streaming the bulk upload body, rather than
@@ -280,7 +296,9 @@ export async function syncAssets(
 					value: await readFile(absAssetFile, "base64"),
 					base64: true,
 				});
-				if (controller.signal.aborted) break;
+				if (controller.signal.aborted) {
+					break;
+				}
 			}
 
 			// Upload the bucket to the KV namespace, suppressing logs, we do our own
@@ -299,13 +317,14 @@ export async function syncAssets(
 					typeof e === "object" &&
 					e !== null &&
 					"name" in e &&
-					// @ts-expect-error `e.name` should be typed `unknown`, fixed in
-					//  TypeScript 4.9
-					e.name === "AbortError"
+					(e as { name: string }).name === "AbortError"
 				) {
 					break;
 				}
 				throw e;
+			}
+			if (controller.signal.aborted) {
+				break;
 			}
 			uploadedCount += nextBucket.length;
 			const percent = Math.floor((100 * uploadedCount) / uploadCount);
@@ -328,27 +347,51 @@ export async function syncAssets(
 
 	// Delete stale assets
 	const deleteCount = namespaceKeys.size;
+
 	if (deleteCount > 0) {
 		const s = pluralise(deleteCount);
-		logger.info(`Removing ${formatNumber(deleteCount)} stale asset${s}...`);
-	}
-	await deleteKVBulkKeyValue(accountId, namespace, Array.from(namespaceKeys));
+		logger.info(
+			`${oldAssetTTL ? "Expiring" : "Removing"} ${formatNumber(
+				deleteCount
+			)} stale asset${s}...`
+		);
 
+		if (!oldAssetTTL) {
+			await deleteKVBulkKeyValue(
+				accountId,
+				namespace,
+				Array.from(namespaceKeys)
+			);
+		} else {
+			for (const namespaceKey of namespaceKeys) {
+				const expiration = namespaceKeyInfoMap.get(namespaceKey)?.expiration;
+
+				logger.info(
+					` - ${namespaceKey} ${
+						expiration ? `(already expiring at ${expiration})` : ""
+					}`
+				);
+
+				if (expiration) {
+					continue;
+				}
+
+				const currentValue = await getKVKeyValue(
+					accountId,
+					namespace,
+					namespaceKey
+				);
+				await putKVKeyValue(accountId, namespace, {
+					key: namespaceKey,
+					value: Buffer.from(currentValue),
+					expiration_ttl: oldAssetTTL,
+				});
+			}
+		}
+	}
 	logger.log("↗️  Done syncing assets");
 
 	return { manifest, namespace };
-}
-
-function createPatternMatcher(
-	patterns: string[],
-	exclude: boolean
-): (filePath: string) => boolean {
-	if (patterns.length === 0) {
-		return (_filePath) => !exclude;
-	} else {
-		const ignorer = ignore().add(patterns);
-		return (filePath) => ignorer.test(filePath).ignored;
-	}
 }
 
 /**
@@ -363,7 +406,7 @@ async function validateAssetSize(
 ): Promise<void> {
 	const { size } = await stat(absFilePath);
 	if (size > 25 * 1024 * 1024) {
-		throw new Error(
+		throw new UserError(
 			`File ${relativeFilePath} is too big, it should be under 25 MiB. See https://developers.cloudflare.com/workers/platform/limits#kv-limits`
 		);
 	}
@@ -371,7 +414,7 @@ async function validateAssetSize(
 
 function validateAssetKey(assetKey: string) {
 	if (assetKey.length > 512) {
-		throw new Error(
+		throw new UserError(
 			`The asset path key "${assetKey}" exceeds the maximum key size limit of 512. See https://developers.cloudflare.com/workers/platform/limits#kv-limits",`
 		);
 	}
@@ -389,7 +432,7 @@ function urlSafe(filePath: string): string {
 /**
  * Information about the assets that should be uploaded
  */
-export interface AssetPaths {
+export interface LegacyAssetPaths {
 	/**
 	 * Absolute path to the root of the project.
 	 *
@@ -416,29 +459,33 @@ export interface AssetPaths {
  * Uses the args (passed from the command line) if available,
  * falling back to those defined in the config.
  *
- * (This function corresponds to --assets/config.assets)
+ * (This function corresponds to --legacy-assets/config.assets)
  *
  */
-export function getAssetPaths(
+export function getLegacyAssetPaths(
 	config: Config,
 	assetDirectory: string | undefined
-): AssetPaths | undefined {
+): LegacyAssetPaths | undefined {
 	const baseDirectory = assetDirectory
 		? process.cwd()
 		: path.resolve(path.dirname(config.configPath ?? "wrangler.toml"));
 
 	assetDirectory ??=
-		typeof config.assets === "string"
-			? config.assets
-			: config.assets !== undefined
-			? config.assets.bucket
-			: undefined;
+		typeof config.legacy_assets === "string"
+			? config.legacy_assets
+			: config.legacy_assets !== undefined
+				? config.legacy_assets.bucket
+				: undefined;
 
 	const includePatterns =
-		(typeof config.assets !== "string" && config.assets?.include) || [];
+		(typeof config.legacy_assets !== "string" &&
+			config.legacy_assets?.include) ||
+		[];
 
 	const excludePatterns =
-		(typeof config.assets !== "string" && config.assets?.exclude) || [];
+		(typeof config.legacy_assets !== "string" &&
+			config.legacy_assets?.exclude) ||
+		[];
 
 	return assetDirectory
 		? {
@@ -446,7 +493,7 @@ export function getAssetPaths(
 				assetDirectory,
 				includePatterns,
 				excludePatterns,
-		  }
+			}
 		: undefined;
 }
 
@@ -464,7 +511,7 @@ export function getSiteAssetPaths(
 	assetDirectory?: string,
 	includePatterns = config.site?.include ?? [],
 	excludePatterns = config.site?.exclude ?? []
-): AssetPaths | undefined {
+): LegacyAssetPaths | undefined {
 	const baseDirectory = assetDirectory
 		? process.cwd()
 		: path.resolve(path.dirname(config.configPath ?? "wrangler.toml"));
