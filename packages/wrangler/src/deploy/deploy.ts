@@ -7,6 +7,7 @@ import PQueue from "p-queue";
 import { Response } from "undici";
 import { syncAssets } from "../assets";
 import { fetchListResult, fetchResult } from "../cfetch";
+import { buildContainers, deployContainers } from "../cloudchamber/deploy";
 import { configFileName, formatConfigSnippet } from "../config";
 import { getBindings, provisionBindings } from "../deployment-bundle/bindings";
 import { bundleWorker } from "../deployment-bundle/bundle";
@@ -558,6 +559,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 						jsxFragment,
 						tsconfig: props.tsconfig ?? config.tsconfig,
 						minify,
+						keepNames: config.keep_names ?? true,
 						sourcemap: uploadSourceMaps,
 						nodejsCompatMode,
 						define: { ...config.define, ...props.defines },
@@ -755,8 +757,15 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 		let workerBundle: FormData;
 
 		if (props.dryRun) {
+			if (config.containers) {
+				await buildContainers(config, workerTag ?? "worker-tag");
+			}
+
 			workerBundle = createWorkerUploadForm(worker);
-			printBindings({ ...withoutStaticAssets, vars: maskedVars });
+			printBindings(
+				{ ...withoutStaticAssets, vars: maskedVars },
+				config.tail_consumers
+			);
 		} else {
 			assert(accountId, "Missing accountId");
 
@@ -852,7 +861,10 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 				}
 				bindingsPrinted = true;
 
-				printBindings({ ...withoutStaticAssets, vars: maskedVars });
+				printBindings(
+					{ ...withoutStaticAssets, vars: maskedVars },
+					config.tail_consumers
+				);
 
 				versionId = parseNonHyphenedUuid(result.deployment_id);
 
@@ -878,7 +890,10 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 				}
 			} catch (err) {
 				if (!bindingsPrinted) {
-					printBindings({ ...withoutStaticAssets, vars: maskedVars });
+					printBindings(
+						{ ...withoutStaticAssets, vars: maskedVars },
+						config.tail_consumers
+					);
 				}
 				await helpIfErrorIsSizeOrScriptStartup(
 					err,
@@ -968,6 +983,17 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 
 	// deploy triggers
 	const targets = await triggersDeploy(props);
+
+	if (config.containers) {
+		assert(versionId && accountId);
+		await deployContainers(config, {
+			versionId,
+			accountId,
+			scriptName,
+			dryRun: props.dryRun,
+			env: props.env,
+		});
+	}
 
 	logger.log("Current Version ID:", versionId);
 

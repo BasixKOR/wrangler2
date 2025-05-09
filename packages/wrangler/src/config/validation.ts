@@ -1417,6 +1417,14 @@ function normalizeAndValidateEnvironment(
 			isBoolean,
 			undefined
 		),
+		keep_names: inheritable(
+			diagnostics,
+			topLevelEnv,
+			rawEnv,
+			"keep_names",
+			isBoolean,
+			undefined
+		),
 		first_party_worker: inheritable(
 			diagnostics,
 			topLevelEnv,
@@ -2264,6 +2272,21 @@ const validateContainerAppConfig: ValidatorFn = (
 			diagnostics.errors.push(
 				`"containers.name" should be defined and a string`
 			);
+		}
+
+		if (
+			"rollout_step_percentage" in containerAppOptional &&
+			containerAppOptional.rollout_step_percentage !== undefined
+		) {
+			if (
+				typeof containerAppOptional.rollout_step_percentage !== "number" ||
+				containerAppOptional.rollout_step_percentage > 100 ||
+				containerAppOptional.rollout_step_percentage < 25
+			) {
+				diagnostics.errors.push(
+					`"containers.rollout_step_percentage" should be a number between 25 and 100, but got ${containerAppOptional.rollout_step_percentage}`
+				);
+			}
 		}
 
 		if (
