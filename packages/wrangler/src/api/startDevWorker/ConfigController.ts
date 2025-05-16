@@ -30,7 +30,7 @@ import { getZoneIdForPreview } from "../../zones";
 import { Controller } from "./BaseController";
 import { castErrorCause } from "./events";
 import {
-	convertCfWorkerInitBindingstoBindings,
+	convertCfWorkerInitBindingsToBindings,
 	extractBindingsOfType,
 	unwrapHook,
 } from "./utils";
@@ -168,6 +168,7 @@ async function resolveBindings(
 			...bindings,
 			vars: maskedVars,
 		},
+		input.tailConsumers ?? config.tail_consumers,
 		{
 			registry: input.dev?.registry,
 			local: !input.dev?.remote,
@@ -179,7 +180,7 @@ async function resolveBindings(
 	return {
 		bindings: {
 			...input.bindings,
-			...convertCfWorkerInitBindingstoBindings(bindings),
+			...convertCfWorkerInitBindingsToBindings(bindings),
 		},
 		unsafe: bindings.unsafe,
 	};
@@ -289,6 +290,7 @@ async function resolveConfig(
 			moduleRules: input.build?.moduleRules ?? getRules(config),
 
 			minify: input.build?.minify ?? config.minify,
+			keepNames: input.build?.keepNames ?? config.keep_names,
 			define: { ...config.define, ...input.build?.define },
 			custom: {
 				command: input.build?.custom?.command ?? config.build?.command,
@@ -314,6 +316,7 @@ async function resolveConfig(
 			metadata: input.unsafe?.metadata ?? unsafe?.metadata,
 		},
 		assets: assetsOptions,
+		tailConsumers: config.tail_consumers ?? [],
 	} satisfies StartDevWorkerOptions;
 
 	if (
@@ -322,6 +325,16 @@ async function resolveConfig(
 	) {
 		throw new UserError(
 			"Browser Rendering is not supported locally. Please use `wrangler dev --remote` instead."
+		);
+	}
+
+	if (
+		extractBindingsOfType("analytics_engine", resolved.bindings).length &&
+		!resolved.dev.remote &&
+		resolved.build.format === "service-worker"
+	) {
+		logger.warn(
+			"Analytics Engine is not supported locally when using the service-worker format. Please migrate to the module worker format: https://developers.cloudflare.com/workers/reference/migrate-to-module-workers/"
 		);
 	}
 

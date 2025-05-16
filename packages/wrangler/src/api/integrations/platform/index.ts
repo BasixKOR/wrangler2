@@ -18,6 +18,7 @@ import { dedent } from "../../../utils/dedent";
 import { CacheStorage } from "./caches";
 import { ExecutionContext } from "./executionContext";
 import { getServiceBindings } from "./services";
+import type { AssetsOptions } from "../../../assets";
 import type { Config, RawConfig, RawEnvironment } from "../../../config";
 import type { IncomingRequestCfProperties } from "@cloudflare/workers-types/experimental";
 import type { MiniflareOptions, ModuleRule, WorkerOptions } from "miniflare";
@@ -108,6 +109,8 @@ export async function getPlatformProxy<
 		{
 			MULTIWORKER: false,
 			RESOURCES_PROVISION: false,
+			// TODO: when possible mixed mode should be made available for getPlatformProxy
+			MIXED_MODE: false,
 		},
 		() => getMiniflareOptionsFromConfig(rawConfig, env, options)
 	);
@@ -157,6 +160,7 @@ async function getMiniflareOptionsFromConfig(
 		name: rawConfig.name,
 		services: bindings.services,
 		durableObjects: rawConfig["durable_objects"],
+		tailConsumers: [],
 	});
 
 	const { bindingOptions, externalWorkers } = buildMiniflareBindingOptions({
@@ -168,6 +172,7 @@ async function getMiniflareOptionsFromConfig(
 		serviceBindings: {},
 		migrations: rawConfig.migrations,
 		imagesLocalMode: false,
+		tails: [],
 	});
 
 	const persistOptions = getMiniflarePersistOptions(options.persist);
@@ -261,17 +266,32 @@ export interface Unstable_MiniflareWorkerOptions {
 export function unstable_getMiniflareWorkerOptions(
 	configPath: string,
 	env?: string,
-	options?: { imagesLocalMode: boolean }
+	options?: {
+		imagesLocalMode?: boolean;
+		overrides?: {
+			assets?: Partial<AssetsOptions>;
+		};
+	}
 ): Unstable_MiniflareWorkerOptions;
 export function unstable_getMiniflareWorkerOptions(
 	config: Config,
 	env?: string,
-	options?: { imagesLocalMode: boolean }
+	options?: {
+		imagesLocalMode?: boolean;
+		overrides?: {
+			assets?: Partial<AssetsOptions>;
+		};
+	}
 ): Unstable_MiniflareWorkerOptions;
 export function unstable_getMiniflareWorkerOptions(
 	configOrConfigPath: string | Config,
 	env?: string,
-	options?: { imagesLocalMode: boolean }
+	options?: {
+		imagesLocalMode?: boolean;
+		overrides?: {
+			assets?: Partial<AssetsOptions>;
+		};
+	}
 ): Unstable_MiniflareWorkerOptions {
 	const config =
 		typeof configOrConfigPath === "string"
@@ -296,6 +316,7 @@ export function unstable_getMiniflareWorkerOptions(
 		serviceBindings: {},
 		migrations: config.migrations,
 		imagesLocalMode: !!options?.imagesLocalMode,
+		tails: config.tail_consumers,
 	});
 
 	// This function is currently only exported for the Workers Vitest pool.
@@ -337,7 +358,11 @@ export function unstable_getMiniflareWorkerOptions(
 
 	const sitesAssetPaths = getSiteAssetPaths(config);
 	const sitesOptions = buildSitesOptions({ legacyAssetPaths: sitesAssetPaths });
-	const processedAssetOptions = getAssetsOptions({ assets: undefined }, config);
+	const processedAssetOptions = getAssetsOptions(
+		{ assets: undefined },
+		config,
+		options?.overrides?.assets
+	);
 	const assetOptions = processedAssetOptions
 		? buildAssetOptions({ assets: processedAssetOptions })
 		: {};

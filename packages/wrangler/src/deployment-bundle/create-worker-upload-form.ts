@@ -79,6 +79,7 @@ export type WorkerMetadataBinding =
 			class_name: string;
 			script_name?: string;
 			environment?: string;
+			namespace_id?: string;
 	  }
 	| {
 			type: "workflow";
@@ -385,13 +386,14 @@ export function createWorkerUploadForm(worker: CfWorkerInit): FormData {
 	);
 
 	bindings.services?.forEach(
-		({ binding, service, environment, entrypoint }) => {
+		({ binding, service, environment, entrypoint, props }) => {
 			metadataBindings.push({
 				name: binding,
 				type: "service",
 				service,
 				...(environment && { environment }),
 				...(entrypoint && { entrypoint }),
+				...(props && { props }),
 			});
 		}
 	);

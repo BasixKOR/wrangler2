@@ -7,7 +7,7 @@ import { DevEnv } from "./api";
 import { MultiworkerRuntimeController } from "./api/startDevWorker/MultiworkerRuntimeController";
 import { NoOpProxyController } from "./api/startDevWorker/NoOpProxyController";
 import {
-	convertCfWorkerInitBindingstoBindings,
+	convertCfWorkerInitBindingsToBindings,
 	extractBindingsOfType,
 } from "./api/startDevWorker/utils";
 import { getAssetsOptions } from "./assets";
@@ -20,6 +20,7 @@ import { getVarsForDev } from "./dev/dev-vars";
 import registerDevHotKeys from "./dev/hotkeys";
 import { maybeRegisterLocalWorker } from "./dev/local";
 import { UserError } from "./errors";
+import { getFlag } from "./experimental-flags";
 import isInteractive from "./is-interactive";
 import { logger } from "./logger";
 import { getSiteAssetPaths } from "./sites";
@@ -60,6 +61,7 @@ export const dev = createCommand({
 		overrideExperimentalFlags: (args) => ({
 			MULTIWORKER: Array.isArray(args.config),
 			RESOURCES_PROVISION: args.experimentalProvision ?? false,
+			MIXED_MODE: args.experimentalMixedMode ?? false,
 		}),
 	},
 	metadata: {
@@ -407,6 +409,7 @@ async function updateDevEnvRegistry(
 					devEnv.config.latestConfig?.bindings
 				),
 			},
+			tailConsumers: devEnv.config.latestConfig?.tailConsumers,
 		},
 		registry
 	);
@@ -500,7 +503,7 @@ async function setupDevEnv(
 			bindings: {
 				...(await getPagesAssetsFetcher(args.enablePagesAssetsServiceBinding)),
 				...collectPlainTextVars(args.var),
-				...convertCfWorkerInitBindingstoBindings({
+				...convertCfWorkerInitBindingsToBindings({
 					kv_namespaces: args.kv,
 					vars: args.vars,
 					send_email: undefined,
@@ -854,7 +857,7 @@ export function getBindings(
 	 */
 	// merge KV bindings
 	const kvConfig = (configParam.kv_namespaces || []).map<CfKvNamespace>(
-		({ binding, preview_id, id }) => {
+		({ binding, preview_id, id, remote }) => {
 			// In remote `dev`, we make folks use a separate kv namespace called
 			// `preview_id` instead of `id` so that they don't
 			// break production data. So here we check that a `preview_id`
@@ -871,6 +874,7 @@ export function getBindings(
 			return {
 				binding,
 				id: preview_id ?? id,
+				remote: getFlag("MIXED_MODE") && remote,
 			};
 		}
 	);
@@ -889,7 +893,11 @@ export function getBindings(
 			: d1Db.database_id;
 
 		if (local) {
-			return { ...d1Db, database_id };
+			return {
+				...d1Db,
+				remote: getFlag("MIXED_MODE") && d1Db.remote,
+				database_id,
+			};
 		}
 		// if you have a preview_database_id, we'll use it, but we shouldn't force people to use it.
 		if (!d1Db.preview_database_id && !process.env.NO_D1_WARNING) {
@@ -905,7 +913,7 @@ export function getBindings(
 	// merge R2 bindings
 	const r2Config: EnvironmentNonInheritable["r2_buckets"] =
 		configParam.r2_buckets?.map(
-			({ binding, preview_bucket_name, bucket_name, jurisdiction }) => {
+			({ binding, preview_bucket_name, bucket_name, jurisdiction, remote }) => {
 				// same idea as kv namespace preview id,
 				// same copy-on-write TODO
 				if (!preview_bucket_name && !local) {
@@ -917,6 +925,7 @@ export function getBindings(
 					binding,
 					bucket_name: preview_bucket_name ?? bucket_name,
 					jurisdiction,
+					remote: getFlag("MIXED_MODE") && remote,
 				};
 			}
 		) || [];
@@ -930,7 +939,10 @@ export function getBindings(
 		servicesConfig,
 		servicesArgs,
 		"binding"
-	);
+	).map((service) => ({
+		...service,
+		remote: getFlag("MIXED_MODE") && "remote" in service && !!service.remote,
+	}));
 
 	// Hyperdrive bindings
 	const hyperdriveBindings = configParam.hyperdrive.map((hyperdrive) => {
@@ -961,16 +973,22 @@ export function getBindings(
 		return hyperdrive;
 	});
 
-	// Queues bindings ??
+	// Queues bindings
 	const queuesBindings = [
 		...(configParam.queues.producers || []).map((queue) => {
 			return {
 				binding: queue.binding,
 				queue_name: queue.queue,
 				delivery_delay: queue.delivery_delay,
+				remote: getFlag("MIXED_MODE") && queue.remote,
 			};
 		}),
 	];
+
+	const workflowsConfig = configParam.workflows.map((workflowConfig) => ({
+		...workflowConfig,
+		remote: getFlag("MIXED_MODE") && workflowConfig.remote,
+	}));
 
 	const bindings: CfWorkerInit["bindings"] = {
 		// top-level fields
@@ -991,7 +1009,7 @@ export function getBindings(
 		durable_objects: {
 			bindings: mergedDOBindings,
 		},
-		workflows: configParam.workflows,
+		workflows: workflowsConfig,
 		kv_namespaces: mergedKVBindings,
 		queues: queuesBindings,
 		r2_buckets: mergedR2Bindings,

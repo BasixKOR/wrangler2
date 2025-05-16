@@ -1,14 +1,23 @@
 import { z } from "zod";
 import { ValueOf } from "../workers";
+import { AI_PLUGIN, AI_PLUGIN_NAME } from "./ai";
 import {
 	ANALYTICS_ENGINE_PLUGIN,
 	ANALYTICS_ENGINE_PLUGIN_NAME,
 } from "./analytics-engine";
 import { ASSETS_PLUGIN } from "./assets";
 import { ASSETS_PLUGIN_NAME } from "./assets/constants";
+import {
+	BROWSER_RENDERING_PLUGIN,
+	BROWSER_RENDERING_PLUGIN_NAME,
+} from "./browser-rendering";
 import { CACHE_PLUGIN, CACHE_PLUGIN_NAME } from "./cache";
 import { CORE_PLUGIN, CORE_PLUGIN_NAME } from "./core";
 import { D1_PLUGIN, D1_PLUGIN_NAME } from "./d1";
+import {
+	DISPATCH_NAMESPACE_PLUGIN,
+	DISPATCH_NAMESPACE_PLUGIN_NAME,
+} from "./dispatch-namespace";
 import { DURABLE_OBJECTS_PLUGIN, DURABLE_OBJECTS_PLUGIN_NAME } from "./do";
 import { EMAIL_PLUGIN, EMAIL_PLUGIN_NAME } from "./email";
 import { HYPERDRIVE_PLUGIN, HYPERDRIVE_PLUGIN_NAME } from "./hyperdrive";
@@ -36,6 +45,9 @@ export const PLUGINS = {
 	[SECRET_STORE_PLUGIN_NAME]: SECRET_STORE_PLUGIN,
 	[EMAIL_PLUGIN_NAME]: EMAIL_PLUGIN,
 	[ANALYTICS_ENGINE_PLUGIN_NAME]: ANALYTICS_ENGINE_PLUGIN,
+	[AI_PLUGIN_NAME]: AI_PLUGIN,
+	[BROWSER_RENDERING_PLUGIN_NAME]: BROWSER_RENDERING_PLUGIN,
+	[DISPATCH_NAMESPACE_PLUGIN_NAME]: DISPATCH_NAMESPACE_PLUGIN,
 };
 export type Plugins = typeof PLUGINS;
 
@@ -88,7 +100,10 @@ export type WorkerOptions = z.input<typeof CORE_PLUGIN.options> &
 	z.input<typeof WORKFLOWS_PLUGIN.options> &
 	z.input<typeof PIPELINE_PLUGIN.options> &
 	z.input<typeof SECRET_STORE_PLUGIN.options> &
-	z.input<typeof ANALYTICS_ENGINE_PLUGIN.options>;
+	z.input<typeof ANALYTICS_ENGINE_PLUGIN.options> &
+	z.input<typeof AI_PLUGIN.options> &
+	z.input<typeof BROWSER_RENDERING_PLUGIN.options> &
+	z.input<typeof DISPATCH_NAMESPACE_PLUGIN.options>;
 
 export type SharedOptions = z.input<typeof CORE_PLUGIN.sharedOptions> &
 	z.input<typeof CACHE_PLUGIN.sharedOptions> &
@@ -151,3 +166,6 @@ export * from "./pipelines";
 export * from "./secret-store";
 export * from "./email";
 export * from "./analytics-engine";
+export * from "./ai";
+export * from "./browser-rendering";
+export * from "./dispatch-namespace";

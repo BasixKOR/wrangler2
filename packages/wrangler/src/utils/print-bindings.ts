@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { getFlag } from "../experimental-flags";
 import { logger } from "../logger";
-import type { CfWorkerInit } from "../deployment-bundle/worker";
+import type { CfTailConsumer, CfWorkerInit } from "../deployment-bundle/worker";
 import type { WorkerRegistry } from "../dev-registry";
 
 export const friendlyBindingNames: Record<
@@ -41,6 +41,7 @@ export const friendlyBindingNames: Record<
  */
 export function printBindings(
 	bindings: Partial<CfWorkerInit["bindings"]>,
+	tailConsumers: CfTailConsumer[] = [],
 	context: {
 		registry?: WorkerRegistry | null;
 		local?: boolean;
@@ -146,7 +147,7 @@ export function printBindings(
 	if (workflows !== undefined && workflows.length > 0) {
 		output.push({
 			name: friendlyBindingNames.workflows,
-			entries: workflows.map(({ class_name, script_name, binding }) => {
+			entries: workflows.map(({ class_name, script_name, binding, remote }) => {
 				let value = class_name;
 				if (script_name) {
 					value += ` (defined in ${script_name})`;
@@ -154,7 +155,11 @@ export function printBindings(
 
 				return {
 					key: binding,
-					value: script_name ? value : addSuffix(value),
+					value: script_name
+						? value
+						: addSuffix(value, {
+								isSimulatedLocally: !remote,
+							}),
 				};
 			}),
 		});
@@ -163,11 +168,11 @@ export function printBindings(
 	if (kv_namespaces !== undefined && kv_namespaces.length > 0) {
 		output.push({
 			name: friendlyBindingNames.kv_namespaces,
-			entries: kv_namespaces.map(({ binding, id }) => {
+			entries: kv_namespaces.map(({ binding, id, remote }) => {
 				return {
 					key: binding,
 					value: addSuffix(id, {
-						isSimulatedLocally: true,
+						isSimulatedLocally: !remote,
 					}),
 				};
 			}),
@@ -202,11 +207,11 @@ export function printBindings(
 	if (queues !== undefined && queues.length > 0) {
 		output.push({
 			name: friendlyBindingNames.queues,
-			entries: queues.map(({ binding, queue_name }) => {
+			entries: queues.map(({ binding, queue_name, remote }) => {
 				return {
 					key: binding,
 					value: addSuffix(queue_name, {
-						isSimulatedLocally: true,
+						isSimulatedLocally: !remote,
 					}),
 				};
 			}),
@@ -217,7 +222,13 @@ export function printBindings(
 		output.push({
 			name: friendlyBindingNames.d1_databases,
 			entries: d1_databases.map(
-				({ binding, database_name, database_id, preview_database_id }) => {
+				({
+					binding,
+					database_name,
+					database_id,
+					preview_database_id,
+					remote,
+				}) => {
 					const remoteDatabaseId =
 						typeof database_id === "string" ? database_id : null;
 					let databaseValue =
@@ -232,7 +243,7 @@ export function printBindings(
 					return {
 						key: binding,
 						value: addSuffix(databaseValue, {
-							isSimulatedLocally: true,
+							isSimulatedLocally: !remote,
 						}),
 					};
 				}
@@ -269,20 +280,22 @@ export function printBindings(
 	if (r2_buckets !== undefined && r2_buckets.length > 0) {
 		output.push({
 			name: friendlyBindingNames.r2_buckets,
-			entries: r2_buckets.map(({ binding, bucket_name, jurisdiction }) => {
-				let name = typeof bucket_name === "string" ? bucket_name : "";
+			entries: r2_buckets.map(
+				({ binding, bucket_name, jurisdiction, remote }) => {
+					let name = typeof bucket_name === "string" ? bucket_name : "";
 
-				if (jurisdiction !== undefined) {
-					name += ` (${jurisdiction})`;
+					if (jurisdiction !== undefined) {
+						name += ` (${jurisdiction})`;
+					}
+
+					return {
+						key: binding,
+						value: addSuffix(name, {
+							isSimulatedLocally: !remote,
+						}),
+					};
 				}
-
-				return {
-					key: binding,
-					value: addSuffix(name, {
-						isSimulatedLocally: true,
-					}),
-				};
-			}),
+			),
 		});
 	}
 
@@ -317,13 +330,17 @@ export function printBindings(
 	if (services !== undefined && services.length > 0) {
 		output.push({
 			name: friendlyBindingNames.services,
-			entries: services.map(({ binding, service, entrypoint }) => {
+			entries: services.map(({ binding, service, entrypoint, remote }) => {
 				let value = service;
 				if (entrypoint) {
 					value += `#${entrypoint}`;
 				}
 
-				if (context.local && context.registry !== null) {
+				if (remote) {
+					value = addSuffix(value, {
+						isSimulatedLocally: false,
+					});
+				} else if (context.local && context.registry !== null) {
 					const registryDefinition = context.registry?.[service];
 					hasConnectionStatus = true;
 
@@ -332,11 +349,17 @@ export function printBindings(
 						(!entrypoint ||
 							registryDefinition.entrypointAddresses?.[entrypoint])
 					) {
-						value = value + " " + chalk.green("[connected]");
+						if (getFlag("MIXED_MODE")) {
+							value =
+								value + " " + chalk.green(`[connected to local resource]`);
+						} else {
+							value = value + " " + chalk.green(`[connected]`);
+						}
 					} else {
 						value = value + " " + chalk.red("[not connected]");
 					}
 				}
+
 				return {
 					key: binding,
 					value,
@@ -354,7 +377,9 @@ export function printBindings(
 			entries: analytics_engine_datasets.map(({ binding, dataset }) => {
 				return {
 					key: binding,
-					value: addSuffix(dataset ?? binding),
+					value: addSuffix(dataset ?? binding, {
+						isSimulatedLocally: true,
+					}),
 				};
 			}),
 		});
@@ -400,7 +425,7 @@ export function printBindings(
 		if (ai.staging) {
 			entries.push({
 				key: "Staging",
-				value: addSuffix(ai.staging.toString()),
+				value: addSuffix(ai.staging.toString(), { isSimulatedLocally: false }),
 			});
 		}
 
@@ -515,44 +540,73 @@ export function printBindings(
 	}
 
 	if (output.length === 0) {
-		logger.log("No bindings found.");
-		return;
-	}
+		if (context.name && getFlag("MULTIWORKER")) {
+			logger.log(`No bindings found for ${chalk.blue(context.name)}`);
+		} else {
+			logger.log("No bindings found.");
+		}
+	} else {
+		if (context.local) {
+			logger.once.log(
+				`Your Worker and resources are simulated locally via Miniflare. For more information, see: https://developers.cloudflare.com/workers/testing/local-development.\n`
+			);
+		}
 
-	if (context.local) {
-		logger.once.log(
-			`Your Worker and resources are simulated locally via Miniflare. For more information, see: https://developers.cloudflare.com/workers/testing/local-development.\n`
+		let title: string;
+		if (context.provisioning) {
+			title = "The following bindings need to be provisioned:";
+		} else if (context.name && getFlag("MULTIWORKER")) {
+			title = `${chalk.blue(context.name)} has access to the following bindings:`;
+		} else {
+			title = "Your Worker has access to the following bindings:";
+		}
+
+		const message = [
+			title,
+			...output
+				.map((bindingGroup) => {
+					return [
+						`- ${bindingGroup.name}:`,
+						bindingGroup.entries.map(
+							({ key, value }) => `  - ${key}${value ? ":" : ""} ${value}`
+						),
+					];
+				})
+				.flat(2),
+		].join("\n");
+
+		logger.log(message);
+	}
+	let title: string;
+	if (context.name && getFlag("MULTIWORKER")) {
+		title = `${chalk.blue(context.name)} is sending Tail events to the following Workers:`;
+	} else {
+		title = "Your Worker is sending Tail events to the following Workers:";
+	}
+	if (tailConsumers !== undefined && tailConsumers.length > 0) {
+		logger.log(
+			`${title}\n${tailConsumers
+				.map(({ service }) => {
+					if (context.local && context.registry !== null) {
+						const registryDefinition = context.registry?.[service];
+						hasConnectionStatus = true;
+
+						if (registryDefinition) {
+							return `- ${service} ${chalk.green("[connected]")}`;
+						} else {
+							return `- ${service} ${chalk.red("[not connected]")}`;
+						}
+					} else {
+						return `- ${service}`;
+					}
+				})
+				.join("\n")}`
 		);
 	}
 
-	let title: string;
-	if (context.provisioning) {
-		title = "The following bindings need to be provisioned:";
-	} else if (context.name && getFlag("MULTIWORKER")) {
-		title = `${chalk.blue(context.name)} has access to the following bindings:`;
-	} else {
-		title = "Your worker has access to the following bindings:";
-	}
-
-	const message = [
-		title,
-		...output
-			.map((bindingGroup) => {
-				return [
-					`- ${bindingGroup.name}:`,
-					bindingGroup.entries.map(
-						({ key, value }) => `  - ${key}${value ? ":" : ""} ${value}`
-					),
-				];
-			})
-			.flat(2),
-	].join("\n");
-
-	logger.log(message);
-
 	if (hasConnectionStatus) {
 		logger.once.info(
-			`\nService bindings & durable object bindings connect to other \`wrangler dev\` processes running locally, with their connection status indicated by ${chalk.green("[connected]")} or ${chalk.red("[not connected]")}. For more details, refer to https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/#local-development\n`
+			`\nService bindings, Durable Object bindings, and Tail consumers connect to other \`wrangler dev\` processes running locally, with their connection status indicated by ${chalk.green("[connected]")} or ${chalk.red("[not connected]")}. For more details, refer to https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/#local-development\n`
 		);
 	}
 }
