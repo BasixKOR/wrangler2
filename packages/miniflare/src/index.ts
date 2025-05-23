@@ -12,7 +12,7 @@ import { ReadableStream } from "stream/web";
 import util from "util";
 import zlib from "zlib";
 import exitHook from "exit-hook";
-import { $ as colors$ } from "kleur/colors";
+import { $ as colors$, green } from "kleur/colors";
 import stoppable from "stoppable";
 import {
 	Dispatcher,
@@ -78,6 +78,7 @@ import {
 	ServiceDesignatorSchema,
 } from "./plugins/core";
 import { InspectorProxyController } from "./plugins/core/inspector-proxy";
+import { imagesLocalFetcher } from "./plugins/images/fetcher";
 import {
 	Config,
 	Extension,
@@ -871,18 +872,22 @@ export class Miniflare {
 		request: Request,
 		customService: string
 	): Promise<Response> {
-		const slashIndex = customService.indexOf("/");
-		// TODO: technically may want to keep old versions around so can always
-		//  recover this in case of setOptions()?
-		const workerIndex = parseInt(customService.substring(0, slashIndex));
-		const serviceKind = customService[slashIndex + 1] as CustomServiceKind;
-		const serviceName = customService.substring(slashIndex + 2);
 		let service: z.infer<typeof ServiceDesignatorSchema> | undefined;
-		if (serviceKind === CustomServiceKind.UNKNOWN) {
-			service =
-				this.#workerOpts[workerIndex]?.core.serviceBindings?.[serviceName];
-		} else if (serviceName === CUSTOM_SERVICE_KNOWN_OUTBOUND) {
-			service = this.#workerOpts[workerIndex]?.core.outboundService;
+		if (customService === CoreBindings.IMAGES_SERVICE) {
+			service = imagesLocalFetcher;
+		} else {
+			const slashIndex = customService.indexOf("/");
+			// TODO: technically may want to keep old versions around so can always
+			//  recover this in case of setOptions()?
+			const workerIndex = parseInt(customService.substring(0, slashIndex));
+			const serviceKind = customService[slashIndex + 1] as CustomServiceKind;
+			const serviceName = customService.substring(slashIndex + 2);
+			if (serviceKind === CustomServiceKind.UNKNOWN) {
+				service =
+					this.#workerOpts[workerIndex]?.core.serviceBindings?.[serviceName];
+			} else if (serviceName === CUSTOM_SERVICE_KNOWN_OUTBOUND) {
+				service = this.#workerOpts[workerIndex]?.core.outboundService;
+			}
 		}
 		// Should only define custom service bindings if `service` is a function
 		assert(typeof service === "function");
@@ -1288,6 +1293,7 @@ export class Miniflare {
 				workerIndex: i,
 				additionalModules,
 				tmpPath: this.#tmpPath,
+				defaultPersistRoot: sharedOpts.core.defaultPersistRoot,
 				workerNames,
 				loopbackPort,
 				unsafeStickyBlobs,
@@ -1561,7 +1567,7 @@ export class Miniflare {
 			const urlSafeHost = getURLSafeHost(configuredHost);
 			if (this.#sharedOpts.core.logRequests) {
 				this.#log.info(
-					`${ready} on ${secure ? "https" : "http"}://${urlSafeHost}:${entryPort}`
+					`${ready} on ${green(`${secure ? "https" : "http"}://${urlSafeHost}:${entryPort}`)}`
 				);
 			}
 

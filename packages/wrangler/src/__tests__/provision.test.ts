@@ -89,20 +89,19 @@ describe("--x-provision", () => {
 
 		await runWrangler("deploy --x-provision --x-auto-create=false");
 		expect(std.out).toMatchInlineSnapshot(`
-				"Total Upload: xx KiB / gzip: xx KiB
-				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- KV Namespaces:
-				  - KV
-				- D1 Databases:
-				  - D1
-				- R2 Buckets:
-				  - R2
-				Uploaded test-name (TIMINGS)
-				Deployed test-name triggers (TIMINGS)
-				  https://test-name.test-sub-domain.workers.dev
-				Current Version ID: Galaxy-Class"
-			`);
+			"Total Upload: xx KiB / gzip: xx KiB
+			Worker Startup Time: 100 ms
+			Your Worker has access to the following bindings:
+			Binding                 Resource
+			env.KV (inherited)      KV Namespace
+			env.D1 (inherited)      D1 Database
+			env.R2 (inherited)      R2 Bucket
+
+			Uploaded test-name (TIMINGS)
+			Deployed test-name triggers (TIMINGS)
+			  https://test-name.test-sub-domain.workers.dev
+			Current Version ID: Galaxy-Class"
+		`);
 		expect(std.err).toMatchInlineSnapshot(`""`);
 		expect(std.warn).toMatchInlineSnapshot(`""`);
 	});
@@ -177,12 +176,11 @@ describe("--x-provision", () => {
 				"Total Upload: xx KiB / gzip: xx KiB
 
 				The following bindings need to be provisioned:
-				- KV Namespaces:
-				  - KV
-				- D1 Databases:
-				  - D1
-				- R2 Buckets:
-				  - R2
+				Binding        Resource
+				env.KV         KV Namespace
+				env.D1         D1 Database
+				env.R2         R2 Bucket
+
 
 				Provisioning KV (KV Namespace)...
 				✨ KV provisioned 🎉
@@ -196,13 +194,12 @@ describe("--x-provision", () => {
 				🎉 All resources provisioned, continuing with deployment...
 
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- KV Namespaces:
-				  - KV: existing-kv-id
-				- D1 Databases:
-				  - D1: existing-d1-id
-				- R2 Buckets:
-				  - R2: existing-bucket-name
+				Your Worker has access to the following bindings:
+				Binding                            Resource
+				env.KV (existing-kv-id)            KV Namespace
+				env.D1 (existing-d1-id)            D1 Database
+				env.R2 (existing-bucket-name)      R2 Bucket
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -296,12 +293,11 @@ describe("--x-provision", () => {
 				"Total Upload: xx KiB / gzip: xx KiB
 
 				The following bindings need to be provisioned:
-				- KV Namespaces:
-				  - KV
-				- D1 Databases:
-				  - D1
-				- R2 Buckets:
-				  - R2
+				Binding        Resource
+				env.KV         KV Namespace
+				env.D1         D1 Database
+				env.R2         R2 Bucket
+
 
 				Provisioning KV (KV Namespace)...
 				✨ KV provisioned 🎉
@@ -315,13 +311,12 @@ describe("--x-provision", () => {
 				🎉 All resources provisioned, continuing with deployment...
 
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- KV Namespaces:
-				  - KV: existing-kv-id-1
-				- D1 Databases:
-				  - D1: existing-d1-id-1
-				- R2 Buckets:
-				  - R2: existing-bucket-1
+				Your Worker has access to the following bindings:
+				Binding                         Resource
+				env.KV (existing-kv-id-1)       KV Namespace
+				env.D1 (existing-d1-id-1)       D1 Database
+				env.R2 (existing-bucket-1)      R2 Bucket
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -425,12 +420,11 @@ describe("--x-provision", () => {
 				"Total Upload: xx KiB / gzip: xx KiB
 
 				The following bindings need to be provisioned:
-				- KV Namespaces:
-				  - KV
-				- D1 Databases:
-				  - D1
-				- R2 Buckets:
-				  - R2
+				Binding        Resource
+				env.KV         KV Namespace
+				env.D1         D1 Database
+				env.R2         R2 Bucket
+
 
 				Provisioning KV (KV Namespace)...
 				🌀 Creating new KV Namespace \\"new-kv\\"...
@@ -447,13 +441,12 @@ describe("--x-provision", () => {
 				🎉 All resources provisioned, continuing with deployment...
 
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- KV Namespaces:
-				  - KV: new-kv-id
-				- D1 Databases:
-				  - D1: new-d1-id
-				- R2 Buckets:
-				  - R2: new-r2
+				Your Worker has access to the following bindings:
+				Binding                 Resource
+				env.KV (new-kv-id)      KV Namespace
+				env.D1 (new-d1-id)      D1 Database
+				env.R2 (new-r2)         R2 Bucket
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -505,8 +498,9 @@ describe("--x-provision", () => {
 				"Total Upload: xx KiB / gzip: xx KiB
 
 				The following bindings need to be provisioned:
-				- D1 Databases:
-				  - D1
+				Binding        Resource
+				env.D1         D1 Database
+
 
 				Provisioning D1 (D1 Database)...
 				Resource name found in config: prefilled-d1-name
@@ -516,9 +510,10 @@ describe("--x-provision", () => {
 				🎉 All resources provisioned, continuing with deployment...
 
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- D1 Databases:
-				  - D1: prefilled-d1-name (new-d1-id)
+				Your Worker has access to the following bindings:
+				Binding                         Resource
+				env.D1 (prefilled-d1-name)      D1 Database
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -558,9 +553,10 @@ describe("--x-provision", () => {
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- D1 Databases:
-				  - D1: prefilled-d1-name
+				Your Worker has access to the following bindings:
+				Binding                 Resource
+				env.D1 (inherited)      D1 Database
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -624,8 +620,9 @@ describe("--x-provision", () => {
 				"Total Upload: xx KiB / gzip: xx KiB
 
 				The following bindings need to be provisioned:
-				- D1 Databases:
-				  - D1
+				Binding        Resource
+				env.D1         D1 Database
+
 
 				Provisioning D1 (D1 Database)...
 				Resource name found in config: new-d1-name
@@ -635,9 +632,10 @@ describe("--x-provision", () => {
 				🎉 All resources provisioned, continuing with deployment...
 
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- D1 Databases:
-				  - D1: new-d1-name (new-d1-id)
+				Your Worker has access to the following bindings:
+				Binding                   Resource
+				env.D1 (new-d1-name)      D1 Database
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -697,8 +695,9 @@ describe("--x-provision", () => {
 				"Total Upload: xx KiB / gzip: xx KiB
 
 				The following bindings need to be provisioned:
-				- R2 Buckets:
-				  - BUCKET
+				Binding            Resource
+				env.BUCKET         R2 Bucket
+
 
 				Provisioning BUCKET (R2 Bucket)...
 				Resource name found in config: prefilled-r2-name
@@ -708,9 +707,10 @@ describe("--x-provision", () => {
 				🎉 All resources provisioned, continuing with deployment...
 
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- R2 Buckets:
-				  - BUCKET: prefilled-r2-name (eu)
+				Your Worker has access to the following bindings:
+				Binding                                  Resource
+				env.BUCKET (prefilled-r2-name (eu))      R2 Bucket
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -762,9 +762,10 @@ describe("--x-provision", () => {
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- R2 Buckets:
-				  - BUCKET: existing-bucket-name (eu)
+				Your Worker has access to the following bindings:
+				Binding                                     Resource
+				env.BUCKET (existing-bucket-name (eu))      R2 Bucket
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -806,9 +807,10 @@ describe("--x-provision", () => {
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- D1 Databases:
-				  - DB_NAME: existing-db-name (existing-d1-id)
+				Your Worker has access to the following bindings:
+				Binding                             Resource
+				env.DB_NAME (existing-db-name)      D1 Database
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -879,8 +881,9 @@ describe("--x-provision", () => {
 				"Total Upload: xx KiB / gzip: xx KiB
 
 				The following bindings need to be provisioned:
-				- R2 Buckets:
-				  - BUCKET
+				Binding            Resource
+				env.BUCKET         R2 Bucket
+
 
 				Provisioning BUCKET (R2 Bucket)...
 				Resource name found in config: existing-bucket-name
@@ -890,9 +893,10 @@ describe("--x-provision", () => {
 				🎉 All resources provisioned, continuing with deployment...
 
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- R2 Buckets:
-				  - BUCKET: existing-bucket-name (eu)
+				Your Worker has access to the following bindings:
+				Binding                                     Resource
+				env.BUCKET (existing-bucket-name (eu))      R2 Bucket
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev

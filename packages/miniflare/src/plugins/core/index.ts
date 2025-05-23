@@ -8,6 +8,7 @@ import { TextEncoder } from "util";
 import { bold } from "kleur/colors";
 import { MockAgent } from "undici";
 import SCRIPT_ENTRY from "worker:core/entry";
+import STRIP_CF_CONNECTING_IP from "worker:core/strip-cf-connecting-ip";
 import { z } from "zod";
 import { fetch } from "../../http";
 import {
@@ -38,6 +39,7 @@ import { getCacheServiceName } from "../cache";
 import { DURABLE_OBJECTS_STORAGE_SERVICE_NAME } from "../do";
 import {
 	kUnsafeEphemeralUniqueKey,
+	mixedModeClientWorker,
 	parseRoutes,
 	Plugin,
 	ProxyNodeBinding,
@@ -84,9 +86,12 @@ if (process.env.NODE_EXTRA_CA_CERTS !== undefined) {
 		const extra = readFileSync(process.env.NODE_EXTRA_CA_CERTS, "utf8");
 		// Split bundle into individual certificates and add each individually:
 		// https://github.com/cloudflare/miniflare/pull/587/files#r1271579671
-		const pemBegin = "-----BEGIN";
-		for (const cert of extra.split(pemBegin)) {
-			if (cert.trim() !== "") trustedCertificates.push(pemBegin + cert);
+		const certs = extra.match(
+			/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g
+		);
+
+		if (certs !== null) {
+			trustedCertificates.push(...certs);
 		}
 	} catch {}
 }
@@ -155,6 +160,13 @@ const CoreOptionsSchemaInput = z.intersection(
 		 Router Worker)
 		 */
 		hasAssetsAndIsVitest: z.boolean().optional(),
+
+		tails: z.array(ServiceDesignatorSchema).optional(),
+
+		// Strip the CF-Connecting-IP header from outbound fetches
+		// There is an issue with the connect() API and the globalOutbound workerd setting that impacts TCP ingress
+		// We should default it to true once https://github.com/cloudflare/workerd/pull/4145 is resolved
+		stripCfConnectingIp: z.boolean().default(false),
 	})
 );
 export const CoreOptionsSchema = CoreOptionsSchemaInput.transform((value) => {
@@ -214,6 +226,10 @@ export const CoreSharedOptionsSchema = z.object({
 	unsafeTriggerHandlers: z.boolean().optional(),
 	// Enable logging requests
 	logRequests: z.boolean().default(true),
+
+	// Path to the root directory for persisting data
+	// Used as the default for all plugins with the plugin name as the subdirectory name
+	defaultPersistRoot: z.string().optional(),
 });
 
 export const CORE_PLUGIN_NAME = "core";
@@ -255,12 +271,17 @@ function getCustomServiceDesignator(
 ): ServiceDesignator {
 	let serviceName: string;
 	let entrypoint: string | undefined;
+	let props: { json: string } | undefined;
 	if (typeof service === "function") {
 		// Custom `fetch` function
 		serviceName = getCustomServiceName(workerIndex, kind, name);
 	} else if (typeof service === "object") {
+		if ("mixedModeConnectionString" in service) {
+			assert("name" in service && typeof service.name === "string");
+			serviceName = `${CORE_PLUGIN_NAME}:mixed-mode-service:${workerIndex}:${name}`;
+		}
 		// Worker with entrypoint
-		if ("name" in service) {
+		else if ("name" in service) {
 			if (service.name === kCurrentWorker) {
 				// TODO when fetch on WorkerEntrypoints with assets is fixed in dev: point this Router Worker if assets are present.
 				serviceName = getUserServiceName(refererName);
@@ -268,6 +289,9 @@ function getCustomServiceDesignator(
 				serviceName = getUserServiceName(service.name);
 			}
 			entrypoint = service.entrypoint;
+			if (service.props) {
+				props = { json: JSON.stringify(service.props) };
+			}
 		} else {
 			// Builtin workerd service: network, external, disk
 			serviceName = getBuiltinServiceName(workerIndex, kind, name);
@@ -282,7 +306,7 @@ function getCustomServiceDesignator(
 		// Regular user worker
 		serviceName = getUserServiceName(service);
 	}
-	return { name: serviceName, entrypoint };
+	return { name: serviceName, entrypoint, props };
 }
 
 function maybeGetCustomServiceService(
@@ -312,6 +336,20 @@ function maybeGetCustomServiceService(
 		return {
 			name: getBuiltinServiceName(workerIndex, kind, name),
 			...service,
+		};
+	} else if (
+		typeof service === "object" &&
+		service.mixedModeConnectionString !== undefined
+	) {
+		assert(
+			service.mixedModeConnectionString &&
+				service.name &&
+				typeof service.name === "string"
+		);
+
+		return {
+			name: `${CORE_PLUGIN_NAME}:mixed-mode-service:${workerIndex}:${name}`,
+			worker: mixedModeClientWorker(service.mixedModeConnectionString, name),
 		};
 	}
 }
@@ -379,6 +417,26 @@ export function maybeWrappedModuleToWorkerName(
 	if (name.startsWith(WRAPPED_MODULE_PREFIX)) {
 		return name.substring(WRAPPED_MODULE_PREFIX.length);
 	}
+}
+
+function getStripCfConnectingIpName(workerIndex: number) {
+	return `strip-cf-connecting-ip:${workerIndex}`;
+}
+
+function getGlobalOutbound(
+	workerIndex: number,
+	options: z.infer<typeof CORE_PLUGIN.options>
+) {
+	return options.outboundService === undefined
+		? undefined
+		: getCustomServiceDesignator(
+				/* referrer */ options.name,
+				workerIndex,
+				CustomServiceKind.KNOWN,
+				CUSTOM_SERVICE_KNOWN_OUTBOUND,
+				options.outboundService,
+				options.hasAssetsAndIsVitest
+			);
 }
 
 export const CORE_PLUGIN: Plugin<
@@ -586,6 +644,7 @@ export const CORE_PLUGIN: Plugin<
 
 		const services: Service[] = [];
 		const extensions: Extension[] = [];
+
 		if (isWrappedBinding) {
 			const stringName = JSON.stringify(name);
 			function invalidWrapped(reason: string): never {
@@ -679,23 +738,28 @@ export const CORE_PLUGIN: Plugin<
 							: options.unsafeEphemeralDurableObjects
 								? { inMemory: kVoid }
 								: { localDisk: DURABLE_OBJECTS_STORAGE_SERVICE_NAME },
-					globalOutbound:
-						options.outboundService === undefined
-							? undefined
-							: getCustomServiceDesignator(
-									/* referrer */ options.name,
-									workerIndex,
-									CustomServiceKind.KNOWN,
-									CUSTOM_SERVICE_KNOWN_OUTBOUND,
-									options.outboundService,
-									options.hasAssetsAndIsVitest
-								),
+					globalOutbound: options.stripCfConnectingIp
+						? { name: getStripCfConnectingIpName(workerIndex) }
+						: getGlobalOutbound(workerIndex, options),
 					cacheApiOutbound: { name: getCacheServiceName(workerIndex) },
 					moduleFallback:
 						options.unsafeUseModuleFallbackService &&
 						sharedOptions.unsafeModuleFallbackService !== undefined
 							? `localhost:${loopbackPort}`
 							: undefined,
+					tails:
+						options.tails === undefined
+							? undefined
+							: options.tails.map<ServiceDesignator>((service) => {
+									return getCustomServiceDesignator(
+										/* referrer */ options.name,
+										workerIndex,
+										CustomServiceKind.UNKNOWN,
+										name,
+										service,
+										options.hasAssetsAndIsVitest
+									);
+								}),
 				},
 			});
 		}
@@ -712,6 +776,19 @@ export const CORE_PLUGIN: Plugin<
 				if (maybeService !== undefined) services.push(maybeService);
 			}
 		}
+
+		if (options.tails !== undefined) {
+			for (const service of options.tails) {
+				const maybeService = maybeGetCustomServiceService(
+					workerIndex,
+					CustomServiceKind.UNKNOWN,
+					name,
+					service
+				);
+				if (maybeService !== undefined) services.push(maybeService);
+			}
+		}
+
 		if (options.outboundService !== undefined) {
 			const maybeService = maybeGetCustomServiceService(
 				workerIndex,
@@ -720,6 +797,22 @@ export const CORE_PLUGIN: Plugin<
 				options.outboundService
 			);
 			if (maybeService !== undefined) services.push(maybeService);
+		}
+
+		if (options.stripCfConnectingIp) {
+			services.push({
+				name: getStripCfConnectingIpName(workerIndex),
+				worker: {
+					modules: [
+						{
+							name: "index.js",
+							esModule: STRIP_CF_CONNECTING_IP(),
+						},
+					],
+					compatibilityDate: "2025-01-01",
+					globalOutbound: getGlobalOutbound(workerIndex, options),
+				},
+			});
 		}
 
 		return { services, extensions };

@@ -254,6 +254,7 @@ export const versionsUploadCommand = createCommand({
 		overrideExperimentalFlags: (args) => ({
 			MULTIWORKER: false,
 			RESOURCES_PROVISION: args.experimentalProvision ?? false,
+			MIXED_MODE: false,
 		}),
 	},
 	handler: async function versionsUploadHandler(args, { config }) {
@@ -279,10 +280,6 @@ export const versionsUploadCommand = createCommand({
 				"Workers Sites does not support uploading versions through `wrangler versions upload`. You must use `wrangler deploy` instead.",
 				{ telemetryMessage: true }
 			);
-		}
-
-		if (config.workflows?.length) {
-			logger.once.warn("Workflows is currently in open beta.");
 		}
 
 		validateAssetsArgsAndConfig(
@@ -328,7 +325,12 @@ export const versionsUploadCommand = createCommand({
 
 		if (!args.dryRun) {
 			assert(accountId, "Missing account ID");
-			await verifyWorkerMatchesCITag(accountId, name, config.configPath);
+			await verifyWorkerMatchesCITag(
+				config,
+				accountId,
+				name,
+				config.configPath
+			);
 		}
 
 		const { versionId, workerTag, versionPreviewUrl } = await versionsUpload({
@@ -399,6 +401,7 @@ export default async function versionsUpload(props: Props): Promise<{
 					};
 				};
 			}>(
+				config,
 				`/accounts/${accountId}/workers/services/${name}` // TODO(consider): should this be a /versions endpoint?
 			);
 
@@ -569,6 +572,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 						jsxFragment,
 						tsconfig: props.tsconfig ?? config.tsconfig,
 						minify,
+						keepNames: config.keep_names ?? true,
 						sourcemap: uploadSourceMaps,
 						nodejsCompatMode,
 						define: { ...config.define, ...props.defines },
@@ -594,6 +598,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 						// These options are dev-only
 						testScheduled: undefined,
 						watch: undefined,
+						metafile: undefined,
 					}
 				);
 
@@ -628,7 +633,12 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 		// Upload assets if assets is being used
 		const assetsJwt =
 			props.assetsOptions && !props.dryRun
-				? await syncAssets(accountId, props.assetsOptions.directory, scriptName)
+				? await syncAssets(
+						config,
+						accountId,
+						props.assetsOptions.directory,
+						scriptName
+					)
 				: undefined;
 
 		const bindings = getBindings({
@@ -703,7 +713,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 
 		if (props.dryRun) {
 			workerBundle = createWorkerUploadForm(worker);
-			printBindings({ ...bindings, vars: maskedVars });
+			printBindings({ ...bindings, vars: maskedVars }, config.tail_consumers);
 		} else {
 			assert(accountId, "Missing accountId");
 			if (getFlag("RESOURCES_PROVISION")) {
@@ -729,7 +739,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 						metadata: {
 							has_preview: boolean;
 						};
-					}>(`${workerUrl}/versions`, {
+					}>(config, `${workerUrl}/versions`, {
 						method: "POST",
 						body: workerBundle,
 						headers: await getMetricsUsageHeaders(config.send_metrics),
@@ -738,12 +748,15 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 
 				logger.log("Worker Startup Time:", result.startup_time_ms, "ms");
 				bindingsPrinted = true;
-				printBindings({ ...bindings, vars: maskedVars });
+				printBindings({ ...bindings, vars: maskedVars }, config.tail_consumers);
 				versionId = result.id;
 				hasPreview = result.metadata.has_preview;
 			} catch (err) {
 				if (!bindingsPrinted) {
-					printBindings({ ...bindings, vars: maskedVars });
+					printBindings(
+						{ ...bindings, vars: maskedVars },
+						config.tail_consumers
+					);
 				}
 
 				await helpIfErrorIsSizeOrScriptStartup(
@@ -825,15 +838,16 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 		const { previews_enabled: previews_available_on_subdomain } =
 			await fetchResult<{
 				previews_enabled: boolean;
-			}>(`${workerUrl}/subdomain`);
+			}>(config, `${workerUrl}/subdomain`);
 
 		if (previews_available_on_subdomain) {
 			const userSubdomain = await getWorkersDevSubdomain(
+				config,
 				accountId,
 				config.configPath
 			);
 			const shortVersion = versionId.slice(0, 8);
-			versionPreviewUrl = `https://${shortVersion}-${workerName}.${userSubdomain}.workers.dev`;
+			versionPreviewUrl = `https://${shortVersion}-${workerName}.${userSubdomain}`;
 			logger.log(`Version Preview URL: ${versionPreviewUrl}`);
 		}
 	}

@@ -921,6 +921,58 @@ test("Miniflare: service binding to named entrypoint that implements a method re
 	t.deepEqual(rpcTarget.id, "test-id");
 });
 
+test("Miniflare: tail consumer called", async (t) => {
+	const mf = new Miniflare({
+		workers: [
+			{
+				name: "a",
+				tails: ["b"],
+				compatibilityDate: "2025-04-28",
+				modules: true,
+				script: `
+
+				export default {
+					async fetch(request, env) {
+						if(request.url.includes("b")) { return env.B.fetch(request)}
+						console.log("log event")
+
+						return new Response("hello from a");
+					}
+				}
+				`,
+				serviceBindings: {
+					B: "b",
+				},
+			},
+			{
+				name: "b",
+				modules: true,
+				compatibilityDate: "2025-04-28",
+
+				script: `
+				let event;
+				export default {
+					fetch() {return Response.json(event)},
+					tail(e) {event = e }
+				};
+				`,
+			},
+		],
+	});
+	t.teardown(() => mf.dispose());
+
+	const res = await mf.dispatchFetch("http://placeholder");
+	t.deepEqual(await res.text(), "hello from a");
+	t.deepEqual(
+		(
+			(await (await mf.dispatchFetch("http://placeholder/b")).json()) as {
+				logs: { message: string[] }[];
+			}[]
+		)[0].logs[0].message,
+		["log event"]
+	);
+});
+
 test("Miniflare: custom outbound service", async (t) => {
 	const mf = new Miniflare({
 		workers: [
@@ -2941,6 +2993,51 @@ test("Miniflare: CF-Connecting-IP is preserved when present", async (t) => {
 		},
 	});
 	t.deepEqual(await ip.text(), "128.0.0.1");
+});
+
+// regression test for https://github.com/cloudflare/workers-sdk/issues/7924
+// The "server" service just returns the value of the CF-Connecting-IP header which would normally be added by Miniflare. If you send a request to with no such header, Miniflare will add one.
+// The "client" service makes an outbound request with a fake CF-Connecting-IP header to the "server" service. If the outbound stripping happens then this header will not make it to the "server" service
+// so its response will contain the header added by Miniflare. If the stripping is turned off then the response from the "server" service will contain the fake header.
+test("Miniflare: strips CF-Connecting-IP", async (t) => {
+	const server = new Miniflare({
+		script:
+			"export default { fetch(request) { return new Response(request.headers.get(`CF-Connecting-IP`)) } }",
+		modules: true,
+	});
+	const serverUrl = await server.ready;
+
+	const client = new Miniflare({
+		script: `export default { fetch(request) { return fetch('${serverUrl.href}', {headers: {"CF-Connecting-IP":"fake-value"}}) } }`,
+		modules: true,
+		stripCfConnectingIp: true,
+	});
+	t.teardown(() => client.dispose());
+	t.teardown(() => server.dispose());
+
+	const landingPage = await client.dispatchFetch("http://example.com/");
+	// The CF-Connecting-IP header value of "fake-value" should be stripped by Miniflare, and should be replaced with a generic 127.0.0.1
+	t.notDeepEqual(await landingPage.text(), "fake-value");
+});
+
+test("Miniflare: does not strip CF-Connecting-IP when configured", async (t) => {
+	const server = new Miniflare({
+		script:
+			"export default { fetch(request) { return new Response(request.headers.get(`CF-Connecting-IP`)) } }",
+		modules: true,
+	});
+	const serverUrl = await server.ready;
+
+	const client = new Miniflare({
+		script: `export default { fetch(request) { return fetch('${serverUrl.href}', {headers: {"CF-Connecting-IP":"fake-value"}}) } }`,
+		modules: true,
+		stripCfConnectingIp: false,
+	});
+	t.teardown(() => client.dispose());
+	t.teardown(() => server.dispose());
+
+	const landingPage = await client.dispatchFetch("http://example.com/");
+	t.deepEqual(await landingPage.text(), "fake-value");
 });
 
 test("Miniflare: can use module fallback service", async (t) => {
