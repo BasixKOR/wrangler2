@@ -4,6 +4,13 @@ import { mockAccountId, mockApiToken } from "./helpers/mock-account-id";
 import { mockConsoleMethods } from "./helpers/mock-console";
 import { clearDialogs } from "./helpers/mock-dialogs";
 import { msw } from "./helpers/msw";
+import {
+	mockCreateDate,
+	mockEndDate,
+	mockModifiedDate,
+	mockQueuedDate,
+	mockStartDate,
+} from "./helpers/normalize";
 import { runInTempDir } from "./helpers/run-in-tmp";
 import { runWrangler } from "./helpers/run-wrangler";
 import { writeWranglerConfig } from "./helpers/write-wrangler-config";
@@ -113,6 +120,7 @@ describe("wrangler workflows", () => {
 				COMMANDS
 				  wrangler workflows list                     List Workflows associated to account
 				  wrangler workflows describe <name>          Describe Workflow resource
+				  wrangler workflows delete <name>            Delete workflow - when deleting a workflow, it will also delete it's own instances
 				  wrangler workflows trigger <name> [params]  Trigger a workflow, creating a new instance. Can optionally take a JSON string to pass a parameter into the workflow instance
 				  wrangler workflows instances                Manage Workflow instances
 
@@ -142,7 +150,7 @@ describe("wrangler workflows", () => {
 
 				COMMANDS
 				  wrangler workflows instances list <name>            Instance related commands (list, describe, terminate, pause, resume)
-				  wrangler workflows instances describe <name> <id>   Describe a workflow instance - see its logs, retries and errors
+				  wrangler workflows instances describe <name> [id]   Describe a workflow instance - see its logs, retries and errors
 				  wrangler workflows instances terminate <name> <id>  Terminate a workflow instance
 				  wrangler workflows instances pause <name> <id>      Pause a workflow instance
 				  wrangler workflows instances resume <name> <id>     Resume a workflow instance
@@ -162,17 +170,17 @@ describe("wrangler workflows", () => {
 		const mockWorkflows: Workflow[] = [
 			{
 				class_name: "wf_class_1",
-				created_on: "2021-01-01T00:00:00Z",
+				created_on: mockCreateDate.toISOString(),
 				id: "wf_id_1",
-				modified_on: "2021-01-01T00:00:00Z",
+				modified_on: mockModifiedDate.toISOString(),
 				name: "wf_1",
 				script_name: "wf_script_1",
 			},
 			{
 				class_name: "wf_class_2",
-				created_on: "2022-01-01T00:00:00Z",
+				created_on: mockCreateDate.toISOString(),
 				id: "wf_id_2",
-				modified_on: "2022-01-01T00:00:00Z",
+				modified_on: mockModifiedDate.toISOString(),
 				name: "wf_2",
 				script_name: "wf_script_2",
 			},
@@ -203,13 +211,13 @@ describe("wrangler workflows", () => {
 			expect(std.info).toMatchInlineSnapshot(`"Showing last 2 workflows:"`);
 			expect(std.out).toMatchInlineSnapshot(
 				`
-"┌──────┬─────────────┬────────────┬───────────────────────┬───────────────────────┐
-│ Name │ Script name │ Class name │ Created               │ Modified              │
-├──────┼─────────────┼────────────┼───────────────────────┼───────────────────────┤
-│ wf_1 │ wf_script_1 │ wf_class_1 │ 1/1/2021, 12:00:00 AM │ 1/1/2021, 12:00:00 AM │
-├──────┼─────────────┼────────────┼───────────────────────┼───────────────────────┤
-│ wf_2 │ wf_script_2 │ wf_class_2 │ 1/1/2022, 12:00:00 AM │ 1/1/2022, 12:00:00 AM │
-└──────┴─────────────┴────────────┴───────────────────────┴───────────────────────┘"
+				"┌─┬─┬─┬─┬─┐
+				│ Name │ Script name │ Class name │ Created │ Modified │
+				├─┼─┼─┼─┼─┤
+				│ wf_1 │ wf_script_1 │ wf_class_1 │ [mock-create-date] │ [mock-modified-date] │
+				├─┼─┼─┼─┼─┤
+				│ wf_2 │ wf_script_2 │ wf_class_2 │ [mock-create-date] │ [mock-modified-date] │
+				└─┴─┴─┴─┴─┘"
 			`
 			);
 		});
@@ -218,20 +226,60 @@ describe("wrangler workflows", () => {
 	describe("instances list", () => {
 		const mockInstances: Instance[] = [
 			{
-				id: "foo",
-				created_on: "2021-01-01T00:00:00Z",
-				modified_on: "2021-01-01T00:00:00Z",
+				id: "a",
+				created_on: mockCreateDate.toISOString(),
+				modified_on: mockModifiedDate.toISOString(),
+				workflow_id: "b",
+				version_id: "c",
+				status: "complete",
+			},
+			{
+				id: "b",
+				created_on: mockCreateDate.toISOString(),
+				modified_on: mockModifiedDate.toISOString(),
+				workflow_id: "b",
+				version_id: "c",
+				status: "errored",
+			},
+			{
+				id: "c",
+				created_on: mockCreateDate.toISOString(),
+				modified_on: mockModifiedDate.toISOString(),
+				workflow_id: "b",
+				version_id: "c",
+				status: "paused",
+			},
+			{
+				id: "d",
+				created_on: mockCreateDate.toISOString(),
+				modified_on: mockModifiedDate.toISOString(),
+				workflow_id: "b",
+				version_id: "c",
+				status: "queued",
+			},
+			{
+				id: "d",
+				created_on: mockCreateDate.toISOString(),
+				modified_on: mockModifiedDate.toISOString(),
 				workflow_id: "b",
 				version_id: "c",
 				status: "running",
 			},
 			{
-				id: "bar",
-				created_on: "2022-01-01T00:00:00Z",
-				modified_on: "2022-01-01T00:00:00Z",
+				id: "e",
+				created_on: mockCreateDate.toISOString(),
+				modified_on: mockModifiedDate.toISOString(),
 				workflow_id: "b",
 				version_id: "c",
-				status: "running",
+				status: "terminated",
+			},
+			{
+				id: "e",
+				created_on: mockCreateDate.toISOString(),
+				modified_on: mockModifiedDate.toISOString(),
+				workflow_id: "b",
+				version_id: "c",
+				status: "waiting",
 			},
 		];
 
@@ -241,17 +289,27 @@ describe("wrangler workflows", () => {
 
 			await runWrangler(`workflows instances list some-workflow`);
 			expect(std.info).toMatchInlineSnapshot(
-				`"Showing 2 instances from page 1:"`
+				`"Showing 7 instances from page 1:"`
 			);
 			expect(std.out).toMatchInlineSnapshot(
 				`
-"┌─────┬─────────┬───────────────────────┬───────────────────────┬───────────┐
-│ Id  │ Version │ Created               │ Modified              │ Status    │
-├─────┼─────────┼───────────────────────┼───────────────────────┼───────────┤
-│ bar │ c       │ 1/1/2022, 12:00:00 AM │ 1/1/2022, 12:00:00 AM │ ▶ Running │
-├─────┼─────────┼───────────────────────┼───────────────────────┼───────────┤
-│ foo │ c       │ 1/1/2021, 12:00:00 AM │ 1/1/2021, 12:00:00 AM │ ▶ Running │
-└─────┴─────────┴───────────────────────┴───────────────────────┴───────────┘"
+				"┌─┬─┬─┬─┬─┐
+				│ Id │ Version │ Created │ Modified │ Status │
+				├─┼─┼─┼─┼─┤
+				│ a │ c │ [mock-create-date] │ [mock-modified-date] │ ✅ Completed │
+				├─┼─┼─┼─┼─┤
+				│ b │ c │ [mock-create-date] │ [mock-modified-date] │ ❌ Errored │
+				├─┼─┼─┼─┼─┤
+				│ c │ c │ [mock-create-date] │ [mock-modified-date] │ ⏸️ Paused │
+				├─┼─┼─┼─┼─┤
+				│ d │ c │ [mock-create-date] │ [mock-modified-date] │ ⌛ Queued │
+				├─┼─┼─┼─┼─┤
+				│ d │ c │ [mock-create-date] │ [mock-modified-date] │ ▶ Running │
+				├─┼─┼─┼─┼─┤
+				│ e │ c │ [mock-create-date] │ [mock-modified-date] │ 🚫 Terminated │
+				├─┼─┼─┼─┼─┤
+				│ e │ c │ [mock-create-date] │ [mock-modified-date] │ ⏰ Waiting │
+				└─┴─┴─┴─┴─┘"
 			`
 			);
 		});
@@ -260,11 +318,11 @@ describe("wrangler workflows", () => {
 	describe("instances describe", () => {
 		const mockDescribeInstances = async () => {
 			const mockResponse = {
-				end: "2021-01-01T00:00:00Z",
+				end: mockEndDate.toISOString(),
 				output: "string",
 				params: {},
-				queued: "2021-01-01T00:00:00Z",
-				start: "2021-01-01T00:00:00Z",
+				queued: mockQueuedDate.toISOString(),
+				start: mockStartDate.toISOString(),
 				status: "queued",
 				success: true,
 				trigger: {
@@ -273,14 +331,22 @@ describe("wrangler workflows", () => {
 				versionId: "14707576-2549-4848-82ed-f68f8a1b47c7",
 				steps: [
 					{
+						type: "waitForEvent",
+						end: mockEndDate.toISOString(),
+						name: "event",
+						finished: true,
+						output: {},
+						start: mockStartDate.toISOString(),
+					},
+					{
 						attempts: [
 							{
-								end: "2021-01-01T00:00:00Z",
+								end: mockEndDate.toISOString(),
 								error: {
 									message: "string",
 									name: "string",
 								},
-								start: "2021-01-01T00:00:00Z",
+								start: mockStartDate.toISOString(),
 								success: true,
 							},
 						],
@@ -292,10 +358,10 @@ describe("wrangler workflows", () => {
 							},
 							timeout: "string",
 						},
-						end: "2021-01-01T00:00:00Z",
+						end: mockEndDate.toISOString(),
 						name: "string",
 						output: {},
-						start: "2021-01-01T00:00:00Z",
+						start: mockStartDate.toISOString(),
 						success: true,
 						type: "step",
 					},
@@ -314,6 +380,18 @@ describe("wrangler workflows", () => {
 						});
 					},
 					{ once: true }
+				),
+				http.get(
+					`*/accounts/:accountId/workflows/some-workflow/instances`,
+					async () => {
+						return HttpResponse.json({
+							success: true,
+							errors: [],
+							messages: [],
+							result: [mockResponse],
+						});
+					},
+					{ once: true }
 				)
 			);
 		};
@@ -324,11 +402,51 @@ describe("wrangler workflows", () => {
 
 			await runWrangler(`workflows instances describe some-workflow bar`);
 			expect(std.out).toMatchInlineSnapshot(`
-"┌───────────────────────┬───────────────────────┬───────────┬────────────┬────────────────┐
-│ Start                 │ End                   │ Duration  │ State      │ Error          │
-├───────────────────────┼───────────────────────┼───────────┼────────────┼────────────────┤
-│ 1/1/2021, 12:00:00 AM │ 1/1/2021, 12:00:00 AM │ 0 seconds │ ✅ Success │ string: string │
-└───────────────────────┴───────────────────────┴───────────┴────────────┴────────────────┘"
+				"  Name:      event
+				  Type:      👀 Waiting for event
+				  Start:     [mock-start-date]
+				  End:       [mock-end-date]
+				  Duration:  4 years
+				  Output:    {}
+				  Name:      string
+				  Type:      🎯 Step
+				  Start:     [mock-start-date]
+				  End:       [mock-end-date]
+				  Duration:  4 years
+				  Success:   ✅ Yes
+				  Output:    {}
+				┌─┬─┬─┬─┬─┐
+				│ Start │ End │ Duration │ State │ Error │
+				├─┼─┼─┼─┼─┤
+				│ [mock-start-date] │ [mock-end-date] │ 4 years │ ✅ Success │ string: string │
+				└─┴─┴─┴─┴─┘"
+			`);
+		});
+
+		it("should describe the latest instance if none is given", async () => {
+			writeWranglerConfig();
+			await mockDescribeInstances();
+
+			await runWrangler(`workflows instances describe some-workflow`);
+			expect(std.out).toMatchInlineSnapshot(`
+				"  Name:      event
+				  Type:      👀 Waiting for event
+				  Start:     [mock-start-date]
+				  End:       [mock-end-date]
+				  Duration:  4 years
+				  Output:    {}
+				  Name:      string
+				  Type:      🎯 Step
+				  Start:     [mock-start-date]
+				  End:       [mock-end-date]
+				  Duration:  4 years
+				  Success:   ✅ Yes
+				  Output:    {}
+				┌─┬─┬─┬─┬─┐
+				│ Start │ End │ Duration │ State │ Error │
+				├─┼─┼─┼─┼─┤
+				│ [mock-start-date] │ [mock-end-date] │ 4 years │ ✅ Success │ string: string │
+				└─┴─┴─┴─┴─┘"
 			`);
 		});
 	});
@@ -337,16 +455,16 @@ describe("wrangler workflows", () => {
 		const mockInstances: Instance[] = [
 			{
 				id: "foo",
-				created_on: "2021-01-01T00:00:00Z",
-				modified_on: "2021-01-01T00:00:00Z",
+				created_on: mockCreateDate.toISOString(),
+				modified_on: mockModifiedDate.toISOString(),
 				workflow_id: "b",
 				version_id: "c",
 				status: "running",
 			},
 			{
 				id: "bar",
-				created_on: "2022-01-01T00:00:00Z",
-				modified_on: "2022-01-01T00:00:00Z",
+				created_on: mockCreateDate.toISOString(),
+				modified_on: mockModifiedDate.toISOString(),
 				workflow_id: "b",
 				version_id: "c",
 				status: "running",
@@ -369,16 +487,16 @@ describe("wrangler workflows", () => {
 		const mockInstances: Instance[] = [
 			{
 				id: "foo",
-				created_on: "2021-01-01T00:00:00Z",
-				modified_on: "2021-01-01T00:00:00Z",
+				created_on: mockCreateDate.toISOString(),
+				modified_on: mockModifiedDate.toISOString(),
 				workflow_id: "b",
 				version_id: "c",
 				status: "running",
 			},
 			{
 				id: "bar",
-				created_on: "2022-01-01T00:00:00Z",
-				modified_on: "2022-01-01T00:00:00Z",
+				created_on: mockCreateDate.toISOString(),
+				modified_on: mockModifiedDate.toISOString(),
 				workflow_id: "b",
 				version_id: "c",
 				status: "paused",
@@ -401,16 +519,16 @@ describe("wrangler workflows", () => {
 		const mockInstances: Instance[] = [
 			{
 				id: "foo",
-				created_on: "2021-01-01T00:00:00Z",
-				modified_on: "2021-01-01T00:00:00Z",
+				created_on: mockCreateDate.toISOString(),
+				modified_on: mockModifiedDate.toISOString(),
 				workflow_id: "b",
 				version_id: "c",
 				status: "running",
 			},
 			{
 				id: "bar",
-				created_on: "2022-01-01T00:00:00Z",
-				modified_on: "2022-01-01T00:00:00Z",
+				created_on: mockCreateDate.toISOString(),
+				modified_on: mockModifiedDate.toISOString(),
 				workflow_id: "b",
 				version_id: "c",
 				status: "running",

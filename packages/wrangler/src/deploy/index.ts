@@ -168,6 +168,12 @@ export const deployCommand = createCommand({
 			describe: "Don't actually deploy",
 			type: "boolean",
 		},
+		metafile: {
+			describe:
+				"Path to output build metadata from esbuild. If flag is used without a path, defaults to 'bundle-meta.json' inside the directory specified by --outdir.",
+			type: "string",
+			coerce: (v: string) => (!v ? true : v),
+		},
 		"keep-vars": {
 			describe:
 				"Stop Wrangler from deleting vars that are not present in the Wrangler configuration file\nBy default Wrangler will remove all vars and replace them with those found in the Wrangler configuration.\nIf your development approach is to modify vars after deployment via the dashboard you may wish to set this flag.",
@@ -211,6 +217,7 @@ export const deployCommand = createCommand({
 		overrideExperimentalFlags: (args) => ({
 			MULTIWORKER: false,
 			RESOURCES_PROVISION: args.experimentalProvision ?? false,
+			MIXED_MODE: false,
 		}),
 	},
 	validateArgs(args) {
@@ -234,10 +241,6 @@ export const deployCommand = createCommand({
 			config.userConfigPath && path.dirname(config.userConfigPath);
 
 		const entry = await getEntry(args, config, "deploy");
-
-		if (config.workflows?.length) {
-			logger.once.warn("Workflows is currently in open beta.");
-		}
 
 		validateAssetsArgsAndConfig(args, config);
 
@@ -284,7 +287,12 @@ export const deployCommand = createCommand({
 
 		if (!args.dryRun) {
 			assert(accountId, "Missing account ID");
-			await verifyWorkerMatchesCITag(accountId, name, config.configPath);
+			await verifyWorkerMatchesCITag(
+				config,
+				accountId,
+				name,
+				config.configPath
+			);
 		}
 		const { sourceMapSize, versionId, workerTag, targets } = await deploy({
 			config,
@@ -313,6 +321,7 @@ export const deployCommand = createCommand({
 			outDir: args.outdir,
 			outFile: args.outfile,
 			dryRun: args.dryRun,
+			metafile: args.metafile,
 			noBundle: !(args.bundle ?? !config.no_bundle),
 			keepVars: args.keepVars,
 			logpush: args.logpush,

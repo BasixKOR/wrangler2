@@ -137,7 +137,7 @@ async function startWranglerDev(args: string[], skipWaitingForReady = false) {
 	if (!skipWaitingForReady) {
 		let readyMatch: RegExpMatchArray | null = null;
 		for await (const line of stdoutInterface) {
-			if ((readyMatch = readyRegexp.exec(line)) !== null) break;
+			if ((readyMatch = readyRegexp.exec(stripAnsi(line))) !== null) break;
 		}
 		assert(readyMatch !== null, "Expected ready message");
 		result.url = readyMatch[1];
@@ -235,9 +235,9 @@ it.each(exitKeys)("multiworker cleanly exits with $name", async ({ key }) => {
 	const wrangler = await startWranglerDev([
 		"dev",
 		"-c",
-		"wrangler.a.toml",
+		"wrangler.a.jsonc",
 		"-c",
-		"wrangler.b.toml",
+		"wrangler.b.jsonc",
 	]);
 	const duringProcesses = getStartedWorkerdProcesses();
 

@@ -34,6 +34,7 @@ export interface Unstable_DevOptions {
 		binding: string;
 		id?: string;
 		preview_id?: string;
+		remote?: boolean;
 	}[];
 	durableObjects?: {
 		name: string;
@@ -46,11 +47,13 @@ export interface Unstable_DevOptions {
 		service: string;
 		environment?: string | undefined;
 		entrypoint?: string | undefined;
+		remote?: boolean;
 	}[];
 	r2?: {
 		binding: string;
 		bucket_name?: string;
 		preview_bucket_name?: string;
+		remote?: boolean;
 	}[];
 	ai?: {
 		binding: string;
@@ -211,6 +214,7 @@ export async function unstable_dev(
 		logLevel: options?.logLevel ?? defaultLogLevel,
 		port: options?.port ?? 0,
 		experimentalProvision: undefined,
+		experimentalMixedMode: false,
 		experimentalVectorizeBindToProd: vectorizeBindToProd ?? false,
 		experimentalImagesLocalMode: imagesLocalMode ?? false,
 		enableIpc: options?.experimental?.enableIpc,
@@ -223,6 +227,7 @@ export async function unstable_dev(
 			// TODO: can we make this work?
 			MULTIWORKER: false,
 			RESOURCES_PROVISION: false,
+			MIXED_MODE: false,
 		},
 		() => startDev(devOptions)
 	);

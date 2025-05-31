@@ -93,15 +93,12 @@ describe("versions upload", () => {
 		expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
 			Worker Startup Time: 500 ms
-			Your worker has access to the following bindings:
-			- KV Namespaces:
-			  - KV: xxxx-xxxx-xxxx-xxxx
-			- Vars:
-			  - TEST: \\"test-string\\"
-			  - JSON: {
-			 \\"abc\\": \\"def\\",
-			 \\"bool\\": true
-			}
+			Your Worker has access to the following bindings:
+			Binding                                   Resource
+			env.KV (xxxx-xxxx-xxxx-xxxx)              KV Namespace
+			env.TEST (\\"test-string\\")                  Environment Variable
+			env.JSON ({\\"abc\\":\\"def\\",\\"bool\\":true})      Environment Variable
+
 			Uploaded test-name (TIMINGS)
 			Worker Version ID: 51e4886e-2db7-4900-8d38-fbfecfeab993"
 		`);
@@ -131,9 +128,10 @@ describe("versions upload", () => {
 		expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
 			Worker Startup Time: 500 ms
-			Your worker has access to the following bindings:
-			- Vars:
-			  - TEST: \\"test-string\\"
+			Your Worker has access to the following bindings:
+			Binding                       Resource
+			env.TEST (\\"test-string\\")      Environment Variable
+
 			Uploaded test-name (TIMINGS)
 			Worker Version ID: 51e4886e-2db7-4900-8d38-fbfecfeab993
 			Version Preview URL: https://51e4886e-test-name.test-sub-domain.workers.dev"
@@ -163,9 +161,10 @@ describe("versions upload", () => {
 		expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
 			Worker Startup Time: 500 ms
-			Your worker has access to the following bindings:
-			- Vars:
-			  - TEST: \\"test-string\\"
+			Your Worker has access to the following bindings:
+			Binding                       Resource
+			env.TEST (\\"test-string\\")      Environment Variable
+
 			Uploaded test-name (TIMINGS)
 			Worker Version ID: 51e4886e-2db7-4900-8d38-fbfecfeab993"
 		`);

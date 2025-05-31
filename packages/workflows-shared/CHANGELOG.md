@@ -1,5 +1,17 @@
 # @cloudflare/workflows-shared
 
+## 0.3.4
+
+### Patch Changes
+
+- [#9367](https://github.com/cloudflare/workers-sdk/pull/9367) [`2e12e6e`](https://github.com/cloudflare/workers-sdk/commit/2e12e6e6f37d35805fcf6b0f8916cb4136543837) Thanks [@Caio-Nogueira](https://github.com/Caio-Nogueira)! - Fix instance hydration after abort. Some use cases were causing instances to not be properly rehydrated after server shutdown, which would cause the instance to be lost.
+
+## 0.3.3
+
+### Patch Changes
+
+- [#9033](https://github.com/cloudflare/workers-sdk/pull/9033) [`2c50115`](https://github.com/cloudflare/workers-sdk/commit/2c501151d3d1a563681cdb300a298b83862b60e2) Thanks [@dario-piotrowicz](https://github.com/dario-piotrowicz)! - chore: convert wrangler.toml files into wrangler.jsonc ones
+
 ## 0.3.2
 
 ### Patch Changes
