@@ -21,8 +21,7 @@ import type {
 import type { RequestInit } from "undici";
 import type WebSocket from "ws";
 
-// we want to include the banner to make sure it doesn't show up in the output when
-// when --format=json
+// we want to include the banner to make sure it doesn't show up in the output when --format=json
 vi.unmock("../../wrangler-banner");
 vi.mock("ws", async (importOriginal) => {
 	// eslint-disable-next-line @typescript-eslint/consistent-type-imports
@@ -52,6 +51,7 @@ vi.mock("ws", async (importOriginal) => {
 
 describe("pages deployment tail", () => {
 	runInTempDir();
+	const { setIsTTY } = useMockIsTTY();
 
 	let api: MockAPI;
 	afterEach(async () => {
@@ -64,11 +64,6 @@ describe("pages deployment tail", () => {
 	mockAccountId();
 	mockApiToken();
 	const std = mockConsoleMethods();
-
-	beforeEach(() => {
-		// Force the CLI to be "non-interactive" in test env
-		vi.stubEnv("CF_PAGES", "1");
-	});
 
 	/**
 	 * Interaction with the tailing API, including tail creation,
@@ -417,8 +412,6 @@ describe("pages deployment tail", () => {
 	});
 
 	describe("printing", () => {
-		const { setIsTTY } = useMockIsTTY();
-
 		it("logs request messages in JSON format", async () => {
 			api = mockTailAPIs();
 			await runWrangler(
@@ -518,8 +511,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				GET https://example.org/ - Ok @ [mock event timestamp]"
 			`);
@@ -550,8 +542,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				\\"* * * * *\\" @ [mock timestamp string] - Ok"
 			`);
@@ -582,8 +573,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				Alarm @ [mock scheduled time] - Ok"
 			`);
@@ -614,8 +604,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				Email from:from@example.com to:to@example.com size:45416 @ [mock event timestamp] - Ok"
 			`);
@@ -646,8 +635,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				Queue my-queue123 (7 messages) - Ok @ [mock timestamp string]"
 			`);
@@ -677,8 +665,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				Unknown Event - Ok @ [mock timestamp string]"
 			`);
@@ -710,8 +697,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				GET https://example.org/ - Ok @ [mock event timestamp]"
 			`);
@@ -772,8 +758,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				GET https://example.org/ - Ok @ [mock event timestamp]
 				  (log) some string

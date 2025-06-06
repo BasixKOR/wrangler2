@@ -1,3 +1,4 @@
+import { mockJaegerBinding } from "../../../utils/tracing";
 import {
 	flagIsEnabled,
 	SEC_FETCH_MODE_NAVIGATE_HEADER_PREFERS_ASSET_SERVING,
@@ -5,8 +6,9 @@ import {
 import { CACHE_CONTROL_BROWSER } from "../constants";
 import { HEADERS_VERSION } from "../handler";
 import { generateRulesMatcher, replacer } from "./rules-engine";
-import type { AssetConfig } from "../../../utils/types";
+import type { AssetConfig, JaegerTracing } from "../../../utils/types";
 import type { AssetIntentWithResolver } from "../handler";
+import type { Env } from "../worker";
 
 /**
  * Returns a Headers object that contains additional headers (to those
@@ -61,44 +63,51 @@ function isCacheable(request: Request) {
 export function attachCustomHeaders(
 	request: Request,
 	response: Response,
-	configuration: Required<AssetConfig>
+	configuration: Required<AssetConfig>,
+	env: Env
 ) {
-	// Iterate through rules and find rules that match the path
-	const headersMatcher = generateRulesMatcher(
-		configuration.headers?.version === HEADERS_VERSION
-			? configuration.headers.rules
-			: {},
-		({ set = {}, unset = [] }, replacements) => {
-			const replacedSet: Record<string, string> = {};
-			Object.keys(set).forEach((key) => {
-				replacedSet[key] = replacer(set[key], replacements);
-			});
-			return {
-				set: replacedSet,
-				unset,
-			};
-		}
-	);
-	const matches = headersMatcher({ request });
-
-	// This keeps track of every header that we've set from _headers
-	// because we want to combine user declared headers but overwrite
-	// existing and extra ones
-	const setMap = new Set();
-	// Apply every matched rule in order
-	matches.forEach(({ set = {}, unset = [] }) => {
-		unset.forEach((key) => {
-			response.headers.delete(key);
-		});
-		Object.keys(set).forEach((key) => {
-			if (setMap.has(key.toLowerCase())) {
-				response.headers.append(key, set[key]);
-			} else {
-				response.headers.set(key, set[key]);
-				setMap.add(key.toLowerCase());
+	const jaeger: JaegerTracing = env.JAEGER ?? mockJaegerBinding();
+	return jaeger.enterSpan("add_headers", (span) => {
+		// Iterate through rules and find rules that match the path
+		const headersMatcher = generateRulesMatcher(
+			configuration.headers?.version === HEADERS_VERSION
+				? configuration.headers.rules
+				: {},
+			({ set = {}, unset = [] }, replacements) => {
+				const replacedSet: Record<string, string> = {};
+				Object.entries(set).forEach(([key, value]) => {
+					replacedSet[key] = replacer(value, replacements);
+				});
+				return {
+					set: replacedSet,
+					unset,
+				};
 			}
-		});
-	});
+		);
+		const matches = headersMatcher({ request });
 
-	return response;
+		// This keeps track of every header that we've set from _headers
+		// because we want to combine user declared headers but overwrite
+		// existing and extra ones
+		const setMap = new Set();
+		// Apply every matched rule in order
+		matches.forEach(({ set = {}, unset = [] }) => {
+			unset.forEach((key) => {
+				response.headers.delete(key);
+				span.addLogs({ remove_header: key });
+			});
+			Object.entries(set).forEach(([key, value]) => {
+				if (setMap.has(key.toLowerCase())) {
+					response.headers.append(key, value);
+					span.addLogs({ append_header: key });
+				} else {
+					response.headers.set(key, value);
+					setMap.add(key.toLowerCase());
+					span.addLogs({ add_header: key });
+				}
+			});
+		});
+
+		return response;
+	});
 }

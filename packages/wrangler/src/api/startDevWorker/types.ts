@@ -24,6 +24,7 @@ import type {
 	CfSecretsStoreSecrets,
 	CfSendEmailBindings,
 	CfService,
+	CfTailConsumer,
 	CfUnsafe,
 	CfVectorize,
 	CfWorkflow,
@@ -40,6 +41,7 @@ import type {
 	NodeJSCompatMode,
 	Request,
 	Response,
+	WorkerOptions,
 } from "miniflare";
 import type * as undici from "undici";
 
@@ -64,7 +66,6 @@ export interface StartDevWorkerInput {
 	/**
 	 * The javascript or typescript entry-point of the worker.
 	 * This is the `main` property of a Wrangler configuration file.
-	 * You can specify a file path or provide the contents directly.
 	 */
 	entrypoint?: string;
 	/** The configuration of the worker. */
@@ -75,13 +76,19 @@ export interface StartDevWorkerInput {
 	/** The compatibility flags for the workerd runtime. */
 	compatibilityFlags?: string[];
 
+	/** Specify the compliance region mode of the Worker. */
+	complianceRegion?: Config["compliance_region"];
+
 	env?: string;
 
 	/** The bindings available to the worker. The specified bindind type will be exposed to the worker on the `env` object under the same key. */
 	bindings?: Record<string, Binding>; // Type level constraint for bindings not sharing names
 	migrations?: DurableObjectMigration[];
+	containers?: WorkerOptions["containers"];
 	/** The triggers which will cause the worker's exported default handlers to be called. */
 	triggers?: Trigger[];
+
+	tailConsumers?: CfTailConsumer[];
 
 	/**
 	 * Whether Wrangler should send usage metrics to Cloudflare for this project.
@@ -108,6 +115,8 @@ export interface StartDevWorkerInput {
 		alias?: Record<string, string>;
 		/** Whether the bundled worker is minified. Only takes effect if bundle: true. */
 		minify?: boolean;
+		/** Whether to keep function names after JavaScript transpilations. */
+		keepNames?: boolean;
 		/** Options controlling a custom build step. */
 		custom?: {
 			/** Custom shell command to run before bundling. Runs even if bundle. */
@@ -130,8 +139,8 @@ export interface StartDevWorkerInput {
 	dev?: {
 		/** Options applying to the worker's inspector server. */
 		inspector?: { hostname?: string; port?: number; secure?: boolean };
-		/** Whether the worker runs on the edge or locally. */
-		remote?: boolean;
+		/** Whether the worker runs on the edge or locally. Can also be set to "minimal" for minimal mode. */
+		remote?: boolean | "minimal";
 		/** Cloudflare Account credentials. Can be provided upfront or as a function which will be called only when required. */
 		auth?: AsyncHook<CfAccount, [Pick<Config, "account_id">]>; // provide config.account_id as a hook param
 		/** Whether local storage (KV, Durable Objects, R2, D1, etc) is persisted. You can also specify the directory to persist data to. */
@@ -171,6 +180,9 @@ export interface StartDevWorkerInput {
 
 		/** Treat this as the primary worker in a multiworker setup (i.e. the first Worker in Miniflare's options) */
 		multiworkerPrimary?: boolean;
+
+		/** Whether the experimental mixed mode feature should be enabled */
+		experimentalMixedMode?: boolean;
 	};
 	legacy?: {
 		site?: Hook<Config["site"], [Config]>;
@@ -204,6 +216,7 @@ export type StartDevWorkerOptions = Omit<StartDevWorkerInput, "assets"> & {
 	entrypoint: string;
 	assets?: AssetsOptions;
 	name: string;
+	complianceRegion: Config["compliance_region"];
 };
 
 export type HookValues = string | number | boolean | object | undefined | null;

@@ -1,18 +1,14 @@
 import { setTimeout } from "node:timers/promises";
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import prettyBytes from "pretty-bytes";
+import { createNamespace } from "../core/create-command";
 import { getCloudflareApiEnvironmentFromEnv } from "../environment-variables/misc-variables";
 import { FatalError } from "../errors";
 import { logger } from "../logger";
 import { APIError } from "../parse";
 import formatLabelledValues from "../utils/render-labelled-values";
-import { addCreateOptions, createPipelineHandler } from "./cli/create";
-import { addDeleteOptions, deletePipelineHandler } from "./cli/delete";
-import { addGetOptions, getPipelineHandler } from "./cli/get";
-import { listPipelinesHandler } from "./cli/list";
-import { addUpdateOptions, updatePipelineHandler } from "./cli/update";
 import { generateR2ServiceToken, getR2Bucket } from "./client";
-import type { CommonYargsArgv } from "../yargs-types";
+import type { ComplianceConfig } from "../environment-variables/misc-variables";
 import type { Pipeline } from "./client";
 
 export const BYTES_PER_MB = 1000 * 1000;
@@ -53,12 +49,13 @@ async function verifyBucketAccess(r2: S3Client, bucketName: string) {
 }
 
 export async function authorizeR2Bucket(
+	complianceConfig: ComplianceConfig,
 	pipelineName: string,
 	accountId: string,
 	bucketName: string
 ) {
 	try {
-		await getR2Bucket(accountId, bucketName);
+		await getR2Bucket(complianceConfig, accountId, bucketName);
 	} catch (err) {
 		if (err instanceof APIError) {
 			if (err.code == 10006) {
@@ -121,39 +118,13 @@ export function parseTransform(spec: string) {
 	};
 }
 
-export function pipelines(pipelineYargs: CommonYargsArgv) {
-	return pipelineYargs
-		.command(
-			"create <pipeline>",
-			"Create a new pipeline",
-			addCreateOptions,
-			createPipelineHandler
-		)
-		.command(
-			"list",
-			"List all pipelines",
-			(yargs) => yargs,
-			listPipelinesHandler
-		)
-		.command(
-			"get <pipeline>",
-			"Get a pipeline's configuration",
-			addGetOptions,
-			getPipelineHandler
-		)
-		.command(
-			"update <pipeline>",
-			"Update a pipeline",
-			addUpdateOptions,
-			updatePipelineHandler
-		)
-		.command(
-			"delete <pipeline>",
-			"Delete a pipeline",
-			addDeleteOptions,
-			deletePipelineHandler
-		);
-}
+export const pipelinesNamespace = createNamespace({
+	metadata: {
+		description: "🚰 Manage Cloudflare Pipelines",
+		owner: "Product: Pipelines",
+		status: "open-beta",
+	},
+});
 
 // Test exception to remove delays
 export function __testSkipDelays() {

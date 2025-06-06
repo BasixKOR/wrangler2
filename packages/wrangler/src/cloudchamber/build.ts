@@ -1,16 +1,28 @@
 import { spawn } from "child_process";
 import { stat } from "fs/promises";
-import { logRaw } from "@cloudflare/cli";
+import { getCIOverrideNetworkModeHost } from "../environment-variables/misc-variables";
+import { UserError } from "../errors";
+import { logger } from "../logger";
 import { ImageRegistriesService } from "./client";
+import { resolveAppDiskSize } from "./common";
+import { loadAccount } from "./locations";
 import type { Config } from "../config";
+import type { ContainerApp } from "../config/environment";
 import type {
 	CommonYargsArgvJSON,
 	StrictYargsOptionsToInterfaceJSON,
 } from "../yargs-types";
-import type { ImageRegistryPermissions } from "./client";
+import type {
+	CompleteAccountCustomer,
+	ImageRegistryPermissions,
+} from "./client";
 
 // default cloudflare managed registry
 const domain = "registry.cloudchamber.cfdata.org";
+
+export function getDefaultRegistry() {
+	return domain;
+}
 
 export async function dockerLoginManagedRegistry(options: {
 	pathToDocker?: string;
@@ -29,6 +41,7 @@ export async function dockerLoginManagedRegistry(options: {
 		).on("error", (err) => {
 			throw err;
 		});
+
 		child.stdin.write(credentials.password);
 		child.stdin.end();
 		await new Promise((resolve) => {
@@ -42,6 +55,8 @@ export async function constructBuildCommand(options: {
 	pathToDocker?: string;
 	pathToDockerfile?: string;
 	platform?: string;
+	dockerfile?: string;
+	args?: Record<string, string>;
 }) {
 	// require a tag if we provide dockerfile
 	if (
@@ -62,18 +77,47 @@ export async function constructBuildCommand(options: {
 		imageTag,
 		"--platform",
 		platform,
-		dockerFilePath,
-	].join(" ");
+	];
 
-	return defaultBuildCommand;
+	if (options.args !== undefined) {
+		for (const arg in options.args) {
+			defaultBuildCommand.push("--build-arg", `${arg}=${options.args[arg]}`);
+		}
+	}
+
+	if (options.dockerfile !== undefined) {
+		defaultBuildCommand.push("-f", "-");
+	}
+
+	// This is primarily used by Workers Builds to ensure we build images in Workers Builds with host networking flag
+	if (getCIOverrideNetworkModeHost() === "true") {
+		defaultBuildCommand.push("--network=host");
+	}
+
+	defaultBuildCommand.push(dockerFilePath ?? ".");
+	return defaultBuildCommand.join(" ");
 }
 
 // Function for building
-export function dockerBuild(options: { buildCmd: string }): Promise<void> {
+export function dockerBuild(options: {
+	buildCmd: string;
+	dockerfile?: string;
+}): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const buildCmd = options.buildCmd.split(" ").slice(1);
 		const buildExec = options.buildCmd.split(" ").shift();
-		const child = spawn(String(buildExec), buildCmd, { stdio: "inherit" });
+		const child = spawn(String(buildExec), buildCmd, {
+			stdio: [
+				options.dockerfile !== undefined ? "pipe" : "inherit",
+				"inherit",
+				"inherit",
+			],
+		});
+		if (child.stdin !== null) {
+			child.stdin.write(options.dockerfile);
+			child.stdin.end();
+		}
+
 		child.on("exit", (code) => {
 			if (code === 0) {
 				resolve();
@@ -99,7 +143,7 @@ async function tagImage(original: string, newTag: string, dockerPath: string) {
 export async function push(options: {
 	imageTag?: string;
 	pathToDocker?: string;
-}) {
+}): Promise<string> {
 	if (typeof options.imageTag === "undefined") {
 		throw new Error("Must provide an image tag when pushing");
 	}
@@ -115,6 +159,7 @@ export async function push(options: {
 	await new Promise((resolve) => {
 		child.on("close", resolve);
 	});
+	return imageTag;
 }
 
 export function buildYargs(yargs: CommonYargsArgvJSON) {
@@ -162,48 +207,95 @@ export function pushYargs(yargs: CommonYargsArgvJSON) {
 		.positional("TAG", { type: "string", demandOption: true });
 }
 
-async function isDir(path: string): Promise<boolean> {
+export async function isDir(path: string): Promise<boolean> {
 	const stats = await stat(path);
-	return await stats.isDirectory();
+	return stats.isDirectory();
+}
+
+export type BuildArgs = {
+	tag: string;
+	pathToDockerfileDirectory: string;
+	pathToDocker: string;
+	push: boolean;
+	// specify the contents of the dockerfile if not wanting to use the dockerfile directory
+	dockerfileContents?: string;
+	// sometimes the container config is not set, and we can use this to run other subcommands in the current context
+	container?: ContainerApp;
+	args?: Record<string, string>;
+};
+
+export async function build(args: BuildArgs): Promise<string> {
+	try {
+		const dir = await isDir(args.pathToDockerfileDirectory);
+		if (!dir) {
+			throw new UserError(
+				`${args.pathToDockerfileDirectory} does not exist or is not a directory. Please specify a valid directory path.`
+			);
+		}
+	} catch (error) {
+		throw new UserError(
+			`Error when checking ${args.pathToDockerfileDirectory}: ${error}`
+		);
+	}
+
+	try {
+		const bc = await constructBuildCommand({
+			imageTag: args.tag,
+			pathToDockerfile: args.pathToDockerfileDirectory,
+			pathToDocker: args.pathToDocker,
+			dockerfile: args.dockerfileContents,
+			args: args.args,
+		});
+		await dockerBuild({ buildCmd: bc, dockerfile: args.dockerfileContents });
+
+		// ensure the account is not allowed to build anything that exceeds the current
+		// account's disk size limits
+		const account = await loadAccount();
+		const { size, layers } = await runDockerInspect(
+			getDefaultRegistry() + "/" + args.tag,
+			args.pathToDocker ?? "docker"
+		);
+		// 16MiB is the layer size adjustments we use in devmapper
+		const MiB = 1024 * 1024;
+		const requiredSize = Math.ceil(size * 1.1 + layers * 16 * MiB);
+		await ensureDiskLimits({
+			requiredSize,
+			account: account,
+			containerApp: args.container,
+		});
+
+		if (args.push) {
+			await dockerLoginManagedRegistry({
+				pathToDocker: args.pathToDocker,
+			});
+
+			return await push({ imageTag: args.tag });
+		}
+
+		return args.tag;
+	} catch (error) {
+		if (error instanceof Error) {
+			throw new UserError(error.message);
+		}
+
+		throw new UserError("An unknown error occurred");
+	}
 }
 
 export async function buildCommand(
 	args: StrictYargsOptionsToInterfaceJSON<typeof buildYargs>,
-	_: Config
+	config: Config
 ) {
-	try {
-		const dir = await isDir(args.PATH);
-		if (!dir) {
-			logRaw(`PATH must be a directory`);
-			return;
-		}
-	} catch (error) {
-		logRaw(`Error when checking ${args.PATH}: ${error}`);
-		return;
-	}
-
-	try {
-		await constructBuildCommand({
-			imageTag: args.tag,
-			pathToDockerfile: args.PATH,
+	// if containers are not defined, the build should still work.
+	const containers = config.containers ?? [undefined];
+	for (const container of containers.length > 0 ? containers : [undefined]) {
+		await build({
+			container,
+			tag: args.tag,
+			pathToDockerfileDirectory: args.PATH,
 			pathToDocker: args.pathToDocker,
-		})
-			.then((bc) => dockerBuild({ buildCmd: bc }))
-			.then(async () => {
-				if (args.push) {
-					await dockerLoginManagedRegistry({
-						pathToDocker: args.pathToDocker,
-					}).then(async () => {
-						await push({ imageTag: args.tag });
-					});
-				}
-			});
-	} catch (error) {
-		if (error instanceof Error) {
-			logRaw(error.message);
-		} else {
-			logRaw("Unknown error");
-		}
+			push: args.push,
+		});
 	}
 }
 
@@ -219,9 +311,76 @@ export async function pushCommand(
 		});
 	} catch (error) {
 		if (error instanceof Error) {
-			logRaw(error.message);
-		} else {
-			logRaw("An unknown error occurred");
+			throw new UserError(error.message);
 		}
+
+		throw new UserError("An unknown error occurred");
 	}
+}
+
+export async function ensureDiskLimits(options: {
+	requiredSize: number;
+	account: CompleteAccountCustomer;
+	containerApp: ContainerApp | undefined;
+}): Promise<void> {
+	const MB = 1000 * 1000;
+	const MiB = 1024 * 1024;
+	const appDiskSize = resolveAppDiskSize(options.account, options.containerApp);
+	const accountDiskSize =
+		(options.account.limits.disk_mb_per_deployment ?? 2000) * MB;
+	// if appDiskSize is defined and configured to be more than the accountDiskSize, error
+	if (appDiskSize && appDiskSize > accountDiskSize) {
+		throw new UserError(
+			`Exceeded account limits: Your container is configured to use a disk size of ${appDiskSize / MB} MB. However, that exceeds the account limit of ${accountDiskSize / MB}`
+		);
+	}
+	const maxAllowedImageSizeBytes = appDiskSize ?? accountDiskSize;
+
+	logger.debug(
+		`Disk size limits when building the container: appDiskSize:${appDiskSize}, accountDiskSize:${accountDiskSize}, maxAllowedImageSizeBytes=${maxAllowedImageSizeBytes}(${maxAllowedImageSizeBytes / MB} MB), requiredSized=${options.requiredSize}(${Math.ceil(options.requiredSize / MiB)}MiB)`
+	);
+	if (maxAllowedImageSizeBytes < options.requiredSize) {
+		throw new UserError(
+			`Image too large: needs ${Math.ceil(options.requiredSize / MB)} MB, but your app is limited to images with size ${maxAllowedImageSizeBytes / MB} MB. Your account needs more disk size per instance to run this container. The default disk size is 2GB.`
+		);
+	}
+}
+
+export async function runDockerInspect(
+	image: string,
+	dockerPath: string
+): Promise<{ size: number; layers: number }> {
+	return new Promise((resolve, reject) => {
+		const proc = spawn(
+			dockerPath,
+			[
+				"image",
+				"inspect",
+				image,
+				"--format",
+				"{{ .Size }} {{ len .RootFS.Layers }}",
+			],
+			{
+				stdio: ["ignore", "pipe", "pipe"],
+			}
+		);
+
+		let stdout = "";
+		let stderr = "";
+
+		proc.stdout.on("data", (chunk) => (stdout += chunk));
+		proc.stderr.on("data", (chunk) => (stderr += chunk));
+
+		proc.on("close", (code) => {
+			if (code !== 0) {
+				return reject(
+					new Error(`failed inspecting image locally: ${stderr.trim()}`)
+				);
+			}
+			const [sizeStr, layerStr] = stdout.trim().split(" ");
+			resolve({ size: parseInt(sizeStr, 10), layers: parseInt(layerStr, 10) });
+		});
+
+		proc.on("error", (err) => reject(err));
+	});
 }
