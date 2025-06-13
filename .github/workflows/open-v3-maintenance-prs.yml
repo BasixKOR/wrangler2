@@ -9,7 +9,11 @@ on:
 
 jobs:
   open-pr:
-    if: ${{ github.repository_owner == 'cloudflare' && !contains(github.event.pull_request.labels.*.name, 'skip-v3-pr') }}
+    if: ${{
+      github.repository_owner == 'cloudflare' &&
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'skip-v3-pr') == false
+      }}
     name: Open backport PR for patches
     runs-on: macos-latest
     concurrency:
@@ -47,6 +51,10 @@ jobs:
             Failed to automatically backport this PR's changes to Wrangler v3. Please manually create a PR targeting the `v3-maintenance` branch with your changes. Thank you for helping us keep Wrangler v3 supported!
 
             Depending on your changes, running `git rebase --onto v3-maintenance main ${{ github.head_ref }}` might be a good starting point.
+
+            Notes:
+            - your PR branch should be named `v3-backport-${{ github.event.number }}`
+            - add the `skip-v3-pr` label to the current PR to stop this workflow from failing
 
       - name: "Comment on PR with backport PR details"
         if: steps.open_pr.outputs.has_wrangler_patch == 'true' && success()

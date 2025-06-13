@@ -1,6 +1,7 @@
 import events from "node:events";
 import { fetch, Request } from "undici";
 import { startDev } from "../dev";
+import { getDockerPath } from "../environment-variables/misc-variables";
 import { run } from "../experimental-flags";
 import { logger } from "../logger";
 import type { Environment } from "../config";
@@ -34,6 +35,7 @@ export interface Unstable_DevOptions {
 		binding: string;
 		id?: string;
 		preview_id?: string;
+		remote?: boolean;
 	}[];
 	durableObjects?: {
 		name: string;
@@ -46,11 +48,13 @@ export interface Unstable_DevOptions {
 		service: string;
 		environment?: string | undefined;
 		entrypoint?: string | undefined;
+		remote?: boolean;
 	}[];
 	r2?: {
 		binding: string;
 		bucket_name?: string;
 		preview_bucket_name?: string;
+		remote?: boolean;
 	}[];
 	ai?: {
 		binding: string;
@@ -82,6 +86,8 @@ export interface Unstable_DevOptions {
 		vectorizeBindToProd?: boolean;
 		imagesLocalMode?: boolean;
 		enableIpc?: boolean;
+		enableContainers?: boolean; // Whether to build and connect to containers in dev mode. Defaults to true.
+		dockerPath?: string; // Path to the docker binary, if not on $PATH
 	};
 }
 
@@ -211,10 +217,13 @@ export async function unstable_dev(
 		logLevel: options?.logLevel ?? defaultLogLevel,
 		port: options?.port ?? 0,
 		experimentalProvision: undefined,
+		experimentalMixedMode: false,
 		experimentalVectorizeBindToProd: vectorizeBindToProd ?? false,
 		experimentalImagesLocalMode: imagesLocalMode ?? false,
 		enableIpc: options?.experimental?.enableIpc,
 		nodeCompat: undefined,
+		enableContainers: options?.experimental?.enableContainers ?? false,
+		dockerPath: options?.experimental?.dockerPath ?? getDockerPath(),
 	};
 
 	//outside of test mode, rebuilds work fine, but only one instance of wrangler will work at a time
@@ -223,6 +232,7 @@ export async function unstable_dev(
 			// TODO: can we make this work?
 			MULTIWORKER: false,
 			RESOURCES_PROVISION: false,
+			MIXED_MODE: false,
 		},
 		() => startDev(devOptions)
 	);
@@ -260,7 +270,7 @@ export function parseRequestInput(
 	if (typeof input === "string") {
 		input = new URL(input, "http://placeholder");
 	}
-	// Adapted from Miniflare 3's `dispatchFetch()` function
+	// Adapted from Miniflare's `dispatchFetch()` function
 	const forward = new Request(input, init);
 	const url = new URL(forward.url);
 	forward.headers.set("MF-Original-URL", url.toString());
