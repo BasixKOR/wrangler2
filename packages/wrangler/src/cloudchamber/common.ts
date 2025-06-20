@@ -1,12 +1,19 @@
 import { mkdir } from "fs/promises";
-import { exit } from "process";
-import { crash, logRaw, space, status, updateStatus } from "@cloudflare/cli";
+import { logRaw, space, status, updateStatus } from "@cloudflare/cli";
 import { brandColor, dim } from "@cloudflare/cli/colors";
 import { inputPrompt, spinner } from "@cloudflare/cli/interactive";
+import {
+	ApiError,
+	DeploymentMutationError,
+	InstanceType,
+	OpenAPI,
+} from "@cloudflare/containers-shared";
 import { version as wranglerVersion } from "../../package.json";
 import { readConfig } from "../config";
 import { getConfigCache, purgeConfigCaches } from "../config-cache";
+import { constructStatusMessage } from "../core/CommandRegistry";
 import { getCloudflareApiBaseUrl } from "../environment-variables/misc-variables";
+import { UserError } from "../errors";
 import { isNonInteractiveOrCI } from "../is-interactive";
 import { logger } from "../logger";
 import {
@@ -21,22 +28,26 @@ import {
 	requireAuth,
 	setLoginScopeKeys,
 } from "../user";
-import { ApiError, DeploymentMutationError, OpenAPI } from "./client";
+import { printWranglerBanner } from "../wrangler-banner";
+import { parseByteSize } from "./../parse";
 import { wrap } from "./helpers/wrap";
 import { idToLocationName, loadAccount } from "./locations";
 import type { Config } from "../config";
+import type { CloudchamberConfig, ContainerApp } from "../config/environment";
 import type { Scope } from "../user";
 import type {
 	CommonYargsOptions,
 	StrictYargsOptionsToInterfaceJSON,
 } from "../yargs-types";
+import type { Arg } from "@cloudflare/cli/interactive";
 import type {
 	CompleteAccountCustomer,
+	CreateApplicationRequest,
 	EnvironmentVariable,
 	Label,
 	NetworkParameters,
-} from "./client";
-import type { Arg } from "@cloudflare/cli/interactive";
+	UserDeploymentConfiguration,
+} from "@cloudflare/containers-shared";
 
 export type CommonCloudchamberConfiguration = { json: boolean };
 
@@ -97,6 +108,7 @@ export function handleFailure<
 		? K
 		: never,
 >(
+	command: string,
 	cb: (args: CommandArgumentsObject, config: Config) => Promise<void>
 ): (
 	args: CommonYargsOptions &
@@ -105,6 +117,10 @@ export function handleFailure<
 ) => Promise<void> {
 	return async (args) => {
 		try {
+			if (!args.json) {
+				await printWranglerBanner();
+				logger.warn(constructStatusMessage(command, "alpha"));
+			}
 			const config = readConfig(args);
 			await fillOpenAPIConfiguration(config, args.json);
 			await cb(args, config);
@@ -119,11 +135,11 @@ export function handleFailure<
 			}
 
 			if (err instanceof Error) {
-				logger.log(`${JSON.stringify({ error: err.message })}`);
+				logger.log(JSON.stringify({ error: err.message }));
 				return;
 			}
 
-			logger.log(JSON.stringify(err));
+			throw err;
 		}
 	};
 }
@@ -137,9 +153,9 @@ export async function loadAccountSpinner({ json }: { json?: boolean }) {
  *
  */
 async function getAPIUrl(config: Config) {
-	const api = getCloudflareApiBaseUrl();
+	const api = getCloudflareApiBaseUrl(config);
 	// This one will probably be cache'd already so it won't ask for the accountId again
-	const accountId = config.account_id || (await getAccountId());
+	const accountId = config.account_id || (await getAccountId(config));
 	return `${api}/accounts/${accountId}/cloudchamber`;
 }
 
@@ -166,7 +182,7 @@ export async function promiseSpinner<T>(
 	return t;
 }
 
-async function fillOpenAPIConfiguration(config: Config, json: boolean) {
+export async function fillOpenAPIConfiguration(config: Config, json: boolean) {
 	const headers: Record<string, string> =
 		OpenAPI.HEADERS !== undefined ? { ...OpenAPI.HEADERS } : {};
 
@@ -202,7 +218,7 @@ async function fillOpenAPIConfiguration(config: Config, json: boolean) {
 					" We need to re-authenticate to add a cloudchamber token..."
 			);
 			// cache account id
-			await getAccountId();
+			await getAccountId(config);
 			const account = getAccountFromCache();
 			config.account_id = account?.id ?? config.account_id;
 			await promiseSpinner(logout(), { json, message: "Revoking token" });
@@ -217,22 +233,22 @@ async function fillOpenAPIConfiguration(config: Config, json: boolean) {
 		// This will prompt the user for an accountId being chosen if they haven't configured the account id yet
 		const [, err] = await wrap(requireAuth(config));
 		if (err) {
-			crash("authenticating with the Cloudflare API:", err.message);
-			return;
+			throw new UserError(
+				`authenticating with the Cloudflare API: ${err.message}`
+			);
 		}
 	}
 
 	// Get the loaded API token
 	const token = getAPIToken();
 	if (!token) {
-		crash("unexpected apiToken not existing in credentials");
-		exit(1);
+		throw new UserError("unexpected apiToken not existing in credentials");
 	}
 
 	const val = "apiToken" in token ? token.apiToken : null;
 	// Don't try to support this method of authentication
 	if (!val) {
-		crash(
+		throw new UserError(
 			"we don't allow for authKey/email credentials, use `wrangler login` or CLOUDFLARE_API_TOKEN env variable to authenticate"
 		);
 	}
@@ -245,7 +261,7 @@ async function fillOpenAPIConfiguration(config: Config, json: boolean) {
 	if (OpenAPI.BASE.length === 0) {
 		const [base, errApiURL] = await wrap(getAPIUrl(config));
 		if (errApiURL) {
-			crash("getting the API url:" + errApiURL.message);
+			throw new UserError("getting the API url: " + errApiURL.message);
 		}
 
 		OpenAPI.BASE = base;
@@ -260,7 +276,7 @@ async function fillOpenAPIConfiguration(config: Config, json: boolean) {
 			message = JSON.stringify(err);
 		}
 
-		crash("loading Cloudchamber account failed:" + message);
+		throw new UserError("Loading account failed: " + message);
 	}
 }
 
@@ -300,8 +316,9 @@ export function renderDeploymentConfiguration(
 	{
 		image,
 		location,
+		instanceType,
 		vcpu,
-		memory,
+		memoryMib,
 		environmentVariables,
 		labels,
 		env,
@@ -309,8 +326,9 @@ export function renderDeploymentConfiguration(
 	}: {
 		image: string;
 		location: string;
+		instanceType?: InstanceType;
 		vcpu: number;
-		memory: string;
+		memoryMib: number;
 		environmentVariables: EnvironmentVariable[] | undefined;
 		labels: Label[] | undefined;
 		env?: string;
@@ -346,13 +364,17 @@ export function renderDeploymentConfiguration(
 	const containerInformation = [
 		["image", image],
 		["location", idToLocationName(location)],
-		["vCPU", `${vcpu}`],
-		["memory", memory],
 		["environment variables", environmentVariablesText],
 		["labels", labelsText],
 		...(network === undefined
 			? []
 			: [["IPv4", network.assign_ipv4 === "predefined" ? "yes" : "no"]]),
+		...(instanceType === undefined
+			? [
+					["vCPU", `${vcpu}`],
+					["memory", `${memoryMib} MiB`],
+				]
+			: [["instance type", `${instanceType}`]]),
 	] as const;
 
 	updateStatus(
@@ -368,37 +390,30 @@ export function renderDeploymentMutationError(
 	err: Error
 ) {
 	if (!(err instanceof ApiError)) {
-		crash(err.message);
-		return;
+		throw new UserError(err.message);
 	}
 
 	if (typeof err.body === "string") {
-		crash("There has been an internal error, please try again!");
-		return;
+		throw new UserError("There has been an internal error, please try again!");
 	}
 
 	if (!("error" in err.body)) {
-		crash(err.message);
-		return;
+		throw new UserError(err.message);
 	}
 
 	const errorMessage = err.body.error;
 	if (!(errorMessage in DeploymentMutationError)) {
-		crash(err.message);
-		return;
+		throw new UserError(err.message);
 	}
 
 	const details: Record<string, string> = err.body.details ?? {};
 	function renderAccountLimits() {
-		return `${space(2)}${brandColor("Maximum VCPU per deployment")} ${
-			account.limits.vcpu_per_deployment
-		}\n${space(2)}${brandColor("Maximum total VCPU in your account")} ${
-			account.limits.total_vcpu
-		}\n${space(2)}${brandColor("Maximum memory per deployment")} ${
-			account.limits.memory_per_deployment
-		}\n${space(2)}${brandColor("Maximum total memory in your account")} ${
-			account.limits.total_memory
-		}`;
+		return [
+			`${space(2)}${brandColor("Maximum VCPU per deployment")} ${account.limits.vcpu_per_deployment}`,
+			`${space(2)}${brandColor("Maximum total VCPU in your account")} ${account.limits.total_vcpu}`,
+			`${space(2)}${brandColor("Maximum memory per deployment")} ${account.limits.memory_mib_per_deployment} MiB`,
+			`${space(2)}${brandColor("Maximum total memory in your account")} ${account.limits.total_memory_mib} MiB`,
+		].join("\n");
 	}
 
 	function renderInvalidInputDetails(inputDetails: Record<string, string>) {
@@ -427,7 +442,9 @@ export function renderDeploymentMutationError(
 				"The image registry you are trying to use is not configured. Use the 'wrangler cloudchamber registries configure' command to configure the registry.\n",
 		};
 
-	crash(details["reason"] ?? errorEnumToErrorMessage[errorEnum]());
+	throw new UserError(
+		details["reason"] ?? errorEnumToErrorMessage[errorEnum]()
+	);
 }
 
 function sortEnvironmentVariables(environmentVariables: EnvironmentVariable[]) {
@@ -635,4 +652,157 @@ export async function promptForLabels(
 	}
 
 	return [];
+}
+
+export async function promptForInstanceType(
+	allowSkipping: boolean
+): Promise<InstanceType | undefined> {
+	let options = [
+		{ label: "dev: 1/16 vCPU, 256 MiB memory, 2 GB disk", value: "dev" },
+		{ label: "basic: 1/4 vCPU, 1 GiB memory, 4 GB disk", value: "basic" },
+		{ label: "standard: 1/2 vCPU, 4 GiB memory, 4 GB disk", value: "standard" },
+	];
+	if (allowSkipping) {
+		options = [{ label: "Do not set", value: "skip" }].concat(options);
+	}
+	const action = await inputPrompt({
+		question: "Which instance type should we use for your container?",
+		label: "",
+		defaultValue: false,
+		helpText: "",
+		type: "select",
+		options,
+	});
+
+	switch (action) {
+		case "dev":
+			return InstanceType.DEV;
+		case "basic":
+			return InstanceType.BASIC;
+		case "standard":
+			return InstanceType.STANDARD;
+		default:
+			return undefined;
+	}
+}
+
+// Return the amount of memory to use (in MiB) for a deployment given the
+// provided arguments and configuration.
+export function resolveMemory(
+	args: { memory: string | undefined },
+	config: CloudchamberConfig
+): number | undefined {
+	const MiB = 1024 * 1024;
+
+	const memory = args.memory ?? config.memory;
+	if (memory !== undefined) {
+		return Math.round(parseByteSize(memory, 1024) / MiB);
+	}
+
+	return undefined;
+}
+
+// Return the amount of disk size in (MB) for an application, falls back to the account limits if the app config doesn't exist
+// sometimes the user wants to just build a container here, we should allow checking those based on the account limits if
+// app.configuration is not set
+// ordering: app.configuration.disk.size -> account.limits.disk_mb_per_deployment -> default fallback to 2GB in bytes
+export function resolveAppDiskSize(
+	account: CompleteAccountCustomer,
+	app: ContainerApp | undefined
+): number | undefined {
+	if (app === undefined) {
+		return undefined;
+	}
+	const disk = app.configuration.disk?.size ?? "2GB";
+	return Math.round(parseByteSize(disk));
+}
+
+// Checks that instance type is one of 'dev', 'basic', or 'standard' and that it is not being set alongside memory or vcpu.
+// Returns the instance type to use if correctly set.
+export function checkInstanceType(
+	args: {
+		instanceType: string | undefined;
+		memory: string | undefined;
+		vcpu: number | undefined;
+	},
+	config: CloudchamberConfig
+): InstanceType | undefined {
+	const instance_type = args.instanceType ?? config.instance_type;
+	if (instance_type === undefined) {
+		return;
+	}
+
+	// If instance_type is specified as an argument, it will override any
+	// memory or vcpu specified in the config
+	if (args.memory !== undefined || args.vcpu !== undefined) {
+		throw new UserError(
+			`Field "instance_type" is mutually exclusive with "memory" and "vcpu". These fields cannot be set together.`
+		);
+	}
+
+	switch (instance_type) {
+		case "dev":
+			return InstanceType.DEV;
+		case "basic":
+			return InstanceType.BASIC;
+		case "standard":
+			return InstanceType.STANDARD;
+		default:
+			throw new UserError(
+				`"instance_type" field value is expected to be one of "dev", "basic", or "standard", but got "${instance_type}"`
+			);
+	}
+}
+
+// infers the instance type from a given configuration
+function inferInstanceType(
+	configuration: UserDeploymentConfiguration
+): InstanceType | undefined {
+	if (
+		configuration?.disk?.size_mb !== undefined &&
+		configuration?.memory_mib !== undefined &&
+		configuration?.vcpu !== undefined
+	) {
+		if (
+			configuration.disk.size_mb === 2000 &&
+			configuration.memory_mib === 256 &&
+			configuration.vcpu === 0.0625
+		) {
+			return InstanceType.DEV;
+		} else if (
+			configuration.disk.size_mb === 4000 &&
+			configuration.memory_mib === 1024 &&
+			configuration.vcpu === 0.25
+		) {
+			return InstanceType.BASIC;
+		} else if (
+			configuration.disk.size_mb === 4000 &&
+			configuration.memory_mib === 4096 &&
+			configuration.vcpu === 0.5
+		) {
+			return InstanceType.STANDARD;
+		}
+	}
+}
+
+// removes any disk, memory, or vcpu that have been set in an objects configuration. Used for rendering
+// diffs.
+export function cleanForInstanceType(
+	app: CreateApplicationRequest
+): ContainerApp {
+	if (!("configuration" in app)) {
+		return app as ContainerApp;
+	}
+
+	const instance_type = inferInstanceType(app.configuration);
+	if (instance_type !== undefined) {
+		app.configuration.instance_type = instance_type;
+	}
+
+	delete app.configuration.disk;
+	delete app.configuration.memory;
+	delete app.configuration.memory_mib;
+	delete app.configuration.vcpu;
+
+	return app as ContainerApp;
 }

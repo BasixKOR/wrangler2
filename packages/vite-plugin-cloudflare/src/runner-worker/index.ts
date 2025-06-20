@@ -22,28 +22,27 @@ interface DurableObjectConstructor<T = unknown> {
 
 interface WorkflowEntrypointConstructor<T = unknown> {
 	new (
-		// Constructor type to be added in https://github.com/cloudflare/workerd/pull/3239
-		// ...args: ConstructorParameters<typeof WorkflowEntrypoint<T>>
-		ctx: ExecutionContext,
-		env: T
+		...args: ConstructorParameters<typeof WorkflowEntrypoint<T>>
 	): WorkflowEntrypoint<T>;
 }
 
+const IGNORED_KEYS = ["self", "tailStream"];
+
 const WORKER_ENTRYPOINT_KEYS = [
 	"fetch",
+	"queue",
 	"tail",
+	"test",
 	"trace",
 	"scheduled",
-	"queue",
-	"test",
 ] as const;
 
 const DURABLE_OBJECT_KEYS = [
-	"fetch",
 	"alarm",
-	"webSocketMessage",
+	"fetch",
 	"webSocketClose",
 	"webSocketError",
+	"webSocketMessage",
 ] as const;
 
 const WORKFLOW_ENTRYPOINT_KEYS = ["run"] as const;
@@ -145,8 +144,8 @@ export function createWorkerEntrypointWrapper(
 					}
 
 					if (
-						key === "self" ||
 						typeof key === "symbol" ||
+						IGNORED_KEYS.includes(key) ||
 						(DURABLE_OBJECT_KEYS as readonly string[]).includes(key)
 					) {
 						return;
@@ -177,7 +176,7 @@ export function createWorkerEntrypointWrapper(
 						entryPath = viteDevMetadata.entryPath;
 						const { 0: client, 1: server } = new WebSocketPair();
 						webSocket = client;
-						await createModuleRunner(this.env, server, viteDevMetadata.root);
+						await createModuleRunner(this.env, server);
 					} catch (e) {
 						return new Response(
 							e instanceof Error ? e.message : JSON.stringify(e),
@@ -293,8 +292,8 @@ export function createDurableObjectWrapper(
 					}
 
 					if (
-						key === "self" ||
 						typeof key === "symbol" ||
+						IGNORED_KEYS.includes(key) ||
 						(WORKER_ENTRYPOINT_KEYS as readonly string[]).includes(key)
 					) {
 						return;
@@ -407,13 +406,7 @@ function getViteDevMetadata(request: Request) {
 		);
 	}
 
-	const { root, entryPath } = parsedViteDevMetadataHeader;
-
-	if (root === undefined) {
-		throw new Error(
-			"Unexpected internal error, vite dev metadata header doesn't contain a root value"
-		);
-	}
+	const { entryPath } = parsedViteDevMetadataHeader;
 
 	if (entryPath === undefined) {
 		throw new Error(
@@ -421,5 +414,5 @@ function getViteDevMetadata(request: Request) {
 		);
 	}
 
-	return { root, entryPath };
+	return { entryPath };
 }

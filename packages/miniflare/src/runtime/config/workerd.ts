@@ -46,7 +46,16 @@ export type Service = {
 export interface ServiceDesignator {
 	name?: string;
 	entrypoint?: string;
+	props?: { json: string };
 }
+
+export type Worker_DockerConfiguration = {
+	socketPath: string;
+};
+
+export type Worker_ContainerEngine = {
+	localDocker: Worker_DockerConfiguration;
+};
 
 export type Worker = (
 	| { modules?: Worker_Module[] }
@@ -62,6 +71,8 @@ export type Worker = (
 	durableObjectUniqueKeyModifier?: string;
 	durableObjectStorage?: Worker_DurableObjectStorage;
 	moduleFallback?: string;
+	tails?: ServiceDesignator[];
+	containerEngine?: Worker_ContainerEngine;
 };
 
 export type Worker_DurableObjectStorage =

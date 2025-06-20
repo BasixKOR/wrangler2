@@ -30,10 +30,15 @@ export type Metadata = {
 	owner: Teams;
 	/** Prints something at the bottom of the help */
 	epilogue?: string;
+	examples?: {
+		command: string;
+		description: string;
+	}[];
+	hideGlobalFlags?: string[];
 };
 
-export type ArgDefinition = PositionalOptions &
-	Pick<Options, "hidden" | "requiresArg">;
+export type ArgDefinition = Omit<PositionalOptions, "type"> &
+	Pick<Options, "hidden" | "requiresArg" | "deprecated" | "type">;
 export type NamedArgDefinitions = { [key: string]: ArgDefinition };
 export type HandlerArgs<Args extends NamedArgDefinitions> = DeepFlatten<
 	OnlyCamelCase<
@@ -130,6 +135,12 @@ export type CommandDefinition<
 		printResourceLocation?:
 			| ((args?: HandlerArgs<NamedArgDefs>) => boolean)
 			| boolean;
+
+		/**
+		 * If true, check for environments in the wrangler config, if there are some and the user hasn't specified an environment
+		 * using the `-e|--env` cli flag, show a warning suggesting that one should instead be specified.
+		 */
+		warnIfMultipleEnvsConfiguredButNoneSpecified?: boolean;
 	};
 
 	/**

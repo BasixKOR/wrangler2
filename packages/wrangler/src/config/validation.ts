@@ -3,6 +3,7 @@ import path from "node:path";
 import { dedent } from "ts-dedent";
 import { UserError } from "../errors";
 import { getFlag } from "../experimental-flags";
+import { bucketFormatMessage, isValidR2BucketName } from "../r2/helpers";
 import { friendlyBindingNames } from "../utils/print-bindings";
 import { Diagnostics } from "./diagnostics";
 import {
@@ -16,7 +17,7 @@ import {
 	inheritableInLegacyEnvironments,
 	isBoolean,
 	isMutuallyExclusiveWith,
-	isObjectWith,
+	isOneOf,
 	isOptionalProperty,
 	isRequiredProperty,
 	isString,
@@ -32,14 +33,11 @@ import {
 	validateTypedArray,
 } from "./validation-helpers";
 import { configFileName, formatConfigSnippet } from ".";
-import type {
-	CreateApplicationRequest,
-	UserDeploymentConfiguration,
-} from "../cloudchamber/client";
 import type { CfWorkerInit } from "../deployment-bundle/worker";
 import type { Config, DevConfig, RawConfig, RawDevConfig } from "./config";
 import type {
 	Assets,
+	ContainerEngine,
 	DispatchNamespaceOutbound,
 	Environment,
 	Observability,
@@ -48,6 +46,10 @@ import type {
 	TailConsumer,
 } from "./environment";
 import type { TypeofType, ValidatorFn } from "./validation-helpers";
+import type {
+	CreateApplicationRequest,
+	UserDeploymentConfiguration,
+} from "@cloudflare/containers-shared";
 
 export type NormalizeAndValidateConfigArgs = {
 	name?: string;
@@ -59,6 +61,8 @@ export type NormalizeAndValidateConfigArgs = {
 	localProtocol?: string;
 	upstreamProtocol?: string;
 	script?: string;
+	enableContainers?: boolean;
+	containerEngine?: ContainerEngine;
 };
 
 const ENGLISH = new Intl.ListFormat("en-US");
@@ -74,6 +78,12 @@ export function isPagesConfig(rawConfig: RawConfig): boolean {
  * and copying over inheritable fields into named environments.
  *
  * Any errors or warnings from the validation are available in the returned `diagnostics` object.
+ *
+ * @param rawConfig The config loaded from `configPath`
+ * @param configPath The path to the config file
+ * @param userConfigPath
+ * @param args
+ * @returns The normalized `config` and `diagnostics` message
  */
 export function normalizeAndValidateConfig(
 	rawConfig: RawConfig,
@@ -180,7 +190,7 @@ export function normalizeAndValidateConfig(
 
 	let activeEnv = topLevelEnv;
 
-	if (envName !== undefined) {
+	if (envName) {
 		if (isRedirectedConfig) {
 			// Note: we error if the user is specifying an environment, but not for pages
 			//       commands where the environment is always set (to either "preview" or "production")
@@ -461,6 +471,8 @@ function normalizeAndValidateDev(
 		localProtocol: localProtocolArg,
 		upstreamProtocol: upstreamProtocolArg,
 		remote: remoteArg,
+		enableContainers: enableContainersArg,
+		containerEngine: containerEngineArg,
 	} = args;
 	assert(
 		localProtocolArg === undefined ||
@@ -473,6 +485,15 @@ function normalizeAndValidateDev(
 			upstreamProtocolArg === "https"
 	);
 	assert(remoteArg === undefined || typeof remoteArg === "boolean");
+	assert(
+		enableContainersArg === undefined ||
+			typeof enableContainersArg === "boolean"
+	);
+	assert(
+		containerEngineArg === undefined ||
+			typeof containerEngineArg === "string" ||
+			typeof containerEngineArg?.localDocker?.socketPath === "string"
+	);
 	const {
 		// On Windows, when specifying `localhost` as the socket hostname, `workerd`
 		// will only listen on the IPv4 loopback `127.0.0.1`, not the IPv6 `::1`:
@@ -490,6 +511,7 @@ function normalizeAndValidateDev(
 			? "https"
 			: local_protocol,
 		host,
+		enable_containers = enableContainersArg ?? true,
 		...rest
 	} = rawDev;
 	validateAdditionalProperties(diagnostics, "dev", Object.keys(rest), []);
@@ -520,7 +542,24 @@ function normalizeAndValidateDev(
 		["http", "https"]
 	);
 	validateOptionalProperty(diagnostics, "dev", "host", host, "string");
-	return { ip, port, inspector_port, local_protocol, upstream_protocol, host };
+	validateOptionalProperty(
+		diagnostics,
+		"dev",
+		"enable_containers",
+		enable_containers,
+		"boolean"
+	);
+
+	return {
+		ip,
+		port,
+		inspector_port,
+		local_protocol,
+		upstream_protocol,
+		host,
+		enable_containers,
+		container_engine: containerEngineArg,
+	};
 }
 
 function normalizeAndValidateAssets(
@@ -1121,8 +1160,8 @@ function normalizeAndValidateEnvironment(
 			topLevelEnv,
 			rawEnv,
 			"triggers",
-			isObjectWith("crons"),
-			{ crons: [] }
+			validateTriggers,
+			{ crons: undefined }
 		),
 		assets: normalizeAndValidateAssets(diagnostics, topLevelEnv, rawEnv),
 		limits: normalizeAndValidateLimits(diagnostics, topLevelEnv, rawEnv),
@@ -1381,6 +1420,16 @@ function normalizeAndValidateEnvironment(
 			validateBindingArray(envName, validateSecretsStoreSecretBinding),
 			[]
 		),
+		unsafe_hello_world: notInheritable(
+			diagnostics,
+			topLevelEnv,
+			rawConfig,
+			rawEnv,
+			envName,
+			"unsafe_hello_world",
+			validateBindingArray(envName, validateHelloWorldBinding),
+			[]
+		),
 		version_metadata: notInheritable(
 			diagnostics,
 			topLevelEnv,
@@ -1417,6 +1466,14 @@ function normalizeAndValidateEnvironment(
 			isBoolean,
 			undefined
 		),
+		keep_names: inheritable(
+			diagnostics,
+			topLevelEnv,
+			rawEnv,
+			"keep_names",
+			isBoolean,
+			undefined
+		),
 		first_party_worker: inheritable(
 			diagnostics,
 			topLevelEnv,
@@ -1447,6 +1504,14 @@ function normalizeAndValidateEnvironment(
 			rawEnv,
 			"observability",
 			validateObservability,
+			undefined
+		),
+		compliance_region: inheritable(
+			diagnostics,
+			topLevelEnv,
+			rawEnv,
+			"compliance_region",
+			isOneOf("public", "fedramp_high"),
 			undefined
 		),
 	};
@@ -1498,6 +1563,44 @@ const validateAndNormalizeRules = (
 		validateRules(envName),
 		[]
 	);
+};
+
+const validateTriggers: ValidatorFn = (
+	diagnostics,
+	triggersFieldName,
+	triggersValue
+) => {
+	if (triggersValue === undefined || triggersValue === null) {
+		return true;
+	}
+
+	if (typeof triggersValue !== "object") {
+		diagnostics.errors.push(
+			`Expected "${triggersFieldName}" to be of type object but got ${JSON.stringify(
+				triggersValue
+			)}.`
+		);
+		return false;
+	}
+
+	let isValid = true;
+
+	if ("crons" in triggersValue && !Array.isArray(triggersValue.crons)) {
+		diagnostics.errors.push(
+			`Expected "${triggersFieldName}.crons" to be of type array, but got ${JSON.stringify(triggersValue)}.`
+		);
+		isValid = false;
+	}
+
+	isValid =
+		validateAdditionalProperties(
+			diagnostics,
+			triggersFieldName,
+			Object.keys(triggersValue),
+			["crons"]
+		) && isValid;
+
+	return isValid;
 };
 
 const validateRules =
@@ -1882,6 +1985,10 @@ const validateDurableObjectBinding: ValidatorFn = (
 		isValid = false;
 	}
 
+	if (!isRemoteValid(value, field, diagnostics)) {
+		isValid = false;
+	}
+
 	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
 		"class_name",
 		"environment",
@@ -2018,15 +2125,33 @@ const validateAssetsConfig: ValidatorFn = (diagnostics, field, value) => {
 			["single-page-application", "404-page", "none"]
 		) && isValid;
 
-	isValid =
-		validateOptionalProperty(
-			diagnostics,
-			field,
-			"run_worker_first",
-			(value as Assets).run_worker_first,
-			"boolean"
-		) && isValid;
-
+	if ((value as Assets).run_worker_first !== undefined) {
+		if (typeof (value as Assets).run_worker_first === "boolean") {
+			isValid =
+				validateOptionalProperty(
+					diagnostics,
+					field,
+					"run_worker_first",
+					(value as Assets).run_worker_first,
+					"boolean"
+				) && isValid;
+		} else if (Array.isArray((value as Assets).run_worker_first)) {
+			isValid =
+				validateOptionalTypedArray(
+					diagnostics,
+					"assets.run_worker_first",
+					(value as Assets).run_worker_first,
+					"string"
+				) && isValid;
+		} else {
+			diagnostics.errors.push(
+				`The field "${field}.run_worker_first" should be an array of strings or a boolean, but got ${JSON.stringify(
+					(value as Assets).run_worker_first
+				)}.`
+			);
+			isValid = false;
+		}
+	}
 	isValid =
 		validateAdditionalProperties(diagnostics, field, Object.keys(value), [
 			"directory",
@@ -2060,8 +2185,13 @@ const validateNamedSimpleBinding =
 			isValid = false;
 		}
 
+		if (!isRemoteValid(value, field, diagnostics)) {
+			isValid = false;
+		}
+
 		validateAdditionalProperties(diagnostics, field, Object.keys(value), [
 			"binding",
+			"experimental_remote",
 		]);
 
 		return isValid;
@@ -2085,6 +2215,10 @@ const validateAIBinding =
 		let isValid = true;
 		if (!isRequiredProperty(value, "binding", "string")) {
 			diagnostics.errors.push(`binding should have a string "binding" field.`);
+			isValid = false;
+		}
+
+		if (!isRemoteValid(value, field, diagnostics)) {
 			isValid = false;
 		}
 
@@ -2232,11 +2366,7 @@ const validateBindingArray =
 		return isValid;
 	};
 
-const validateContainerAppConfig: ValidatorFn = (
-	diagnostics,
-	_field,
-	value
-) => {
+const validateContainerAppConfig: ValidatorFn = (diagnostics, field, value) => {
 	if (!value) {
 		return true;
 	}
@@ -2259,11 +2389,44 @@ const validateContainerAppConfig: ValidatorFn = (
 		const containerAppOptional =
 			containerApp as Partial<CreateApplicationRequest> & {
 				image?: string | undefined;
+				instance_type?: "dev" | "basic" | "standard";
 			};
+
 		if (!isRequiredProperty(containerAppOptional, "name", "string")) {
 			diagnostics.errors.push(
 				`"containers.name" should be defined and a string`
 			);
+		}
+
+		if (
+			"rollout_step_percentage" in containerAppOptional &&
+			containerAppOptional.rollout_step_percentage !== undefined
+		) {
+			if (
+				typeof containerAppOptional.rollout_step_percentage !== "number" ||
+				containerAppOptional.rollout_step_percentage > 100 ||
+				containerAppOptional.rollout_step_percentage < 25
+			) {
+				diagnostics.errors.push(
+					`"containers.rollout_step_percentage" should be a number between 25 and 100, but got ${containerAppOptional.rollout_step_percentage}`
+				);
+			}
+		}
+
+		if (
+			"rollout_kind" in containerAppOptional &&
+			containerAppOptional.rollout_kind !== undefined
+		) {
+			if (
+				typeof containerAppOptional.rollout_kind !== "string" ||
+				!["full_auto", "full_manual", "none"].includes(
+					containerAppOptional.rollout_kind
+				)
+			) {
+				diagnostics.errors.push(
+					`"containers.rollout_kind" should be either 'full_auto', 'full_manual' or 'none', but got ${containerAppOptional.rollout_kind}`
+				);
+			}
 		}
 
 		if (
@@ -2299,6 +2462,17 @@ const validateContainerAppConfig: ValidatorFn = (
 		) {
 			diagnostics.errors.push(
 				`"containers.image" should be defined and a string`
+			);
+		}
+
+		if ("instance_type" in containerAppOptional) {
+			validateOptionalProperty(
+				diagnostics,
+				field,
+				"instance_type",
+				containerAppOptional.instance_type,
+				"string",
+				["dev", "basic", "standard"]
 			);
 		}
 	}
@@ -2337,6 +2511,26 @@ const validateCloudchamberConfig: ValidatorFn = (diagnostics, field, value) => {
 			}
 		});
 	});
+
+	if ("instance_type" in value && value.instance_type !== undefined) {
+		if (
+			typeof value.instance_type !== "string" ||
+			!["dev", "basic", "standard"].includes(value.instance_type)
+		) {
+			diagnostics.errors.push(
+				`"instance_type" should be one of 'dev', 'basic', or 'standard', but got ${value.instance_type}`
+			);
+		}
+
+		if (
+			("memory" in value && value.memory !== undefined) ||
+			("vcpu" in value && value.vcpu !== undefined)
+		) {
+			diagnostics.errors.push(
+				`"${field}" configuration should not set either "memory" or "vcpu" with "instance_type"`
+			);
+		}
+	}
 
 	return isValid;
 };
@@ -2381,11 +2575,15 @@ const validateKVBinding: ValidatorFn = (diagnostics, field, value) => {
 		);
 		isValid = false;
 	}
+	if (!isRemoteValid(value, field, diagnostics)) {
+		isValid = false;
+	}
 
 	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
 		"binding",
 		"id",
 		"preview_id",
+		"experimental_remote",
 	]);
 
 	return isValid;
@@ -2459,6 +2657,7 @@ const validateQueueBinding: ValidatorFn = (diagnostics, field, value) => {
 			"binding",
 			"queue",
 			"delivery_delay",
+			"experimental_remote",
 		])
 	) {
 		return false;
@@ -2502,6 +2701,10 @@ const validateQueueBinding: ValidatorFn = (diagnostics, field, value) => {
 		}
 	}
 
+	if (!isRemoteValid(value, field, diagnostics)) {
+		isValid = false;
+	}
+
 	return isValid;
 };
 
@@ -2538,6 +2741,17 @@ const validateR2Binding: ValidatorFn = (diagnostics, field, value) => {
 		);
 		isValid = false;
 	}
+	if (
+		isValid &&
+		hasProperty(value, "bucket_name") &&
+		!isValidR2BucketName(value.bucket_name)
+	) {
+		diagnostics.errors.push(
+			`${field}.bucket_name=${JSON.stringify(value.bucket_name)} is invalid. ${bucketFormatMessage}`
+		);
+		isValid = false;
+	}
+
 	if (!isOptionalProperty(value, "preview_bucket_name", "string")) {
 		diagnostics.errors.push(
 			`"${field}" bindings should, optionally, have a string "preview_bucket_name" field but got ${JSON.stringify(
@@ -2546,6 +2760,17 @@ const validateR2Binding: ValidatorFn = (diagnostics, field, value) => {
 		);
 		isValid = false;
 	}
+	if (
+		isValid &&
+		hasProperty(value, "preview_bucket_name") &&
+		!isValidR2BucketName(value.preview_bucket_name)
+	) {
+		diagnostics.errors.push(
+			`${field}.preview_bucket_name= ${JSON.stringify(value.preview_bucket_name)} is invalid. ${bucketFormatMessage}`
+		);
+		isValid = false;
+	}
+
 	if (!isOptionalProperty(value, "jurisdiction", "string")) {
 		diagnostics.errors.push(
 			`"${field}" bindings should, optionally, have a string "jurisdiction" field but got ${JSON.stringify(
@@ -2555,11 +2780,16 @@ const validateR2Binding: ValidatorFn = (diagnostics, field, value) => {
 		isValid = false;
 	}
 
+	if (!isRemoteValid(value, field, diagnostics)) {
+		isValid = false;
+	}
+
 	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
 		"binding",
 		"bucket_name",
 		"preview_bucket_name",
 		"jurisdiction",
+		"experimental_remote",
 	]);
 
 	return isValid;
@@ -2608,6 +2838,10 @@ const validateD1Binding: ValidatorFn = (diagnostics, field, value) => {
 		isValid = false;
 	}
 
+	if (!isRemoteValid(value, field, diagnostics)) {
+		isValid = false;
+	}
+
 	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
 		"binding",
 		"database_id",
@@ -2616,6 +2850,7 @@ const validateD1Binding: ValidatorFn = (diagnostics, field, value) => {
 		"migrations_dir",
 		"migrations_table",
 		"preview_database_id",
+		"experimental_remote",
 	]);
 
 	return isValid;
@@ -2647,9 +2882,14 @@ const validateVectorizeBinding: ValidatorFn = (diagnostics, field, value) => {
 		isValid = false;
 	}
 
+	if (!isRemoteValid(value, field, diagnostics)) {
+		isValid = false;
+	}
+
 	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
 		"binding",
 		"index_name",
+		"experimental_remote",
 	]);
 
 	return isValid;
@@ -2833,6 +3073,9 @@ const validateServiceBinding: ValidatorFn = (diagnostics, field, value) => {
 		);
 		isValid = false;
 	}
+	if (!isRemoteValid(value, field, diagnostics)) {
+		isValid = false;
+	}
 	return isValid;
 };
 
@@ -2920,6 +3163,11 @@ const validateWorkerNamespaceBinding: ValidatorFn = (
 			isValid = false;
 		}
 	}
+
+	if (!isRemoteValid(value, field, diagnostics)) {
+		isValid = false;
+	}
+
 	return isValid;
 };
 
@@ -3005,7 +3253,12 @@ const validateMTlsCertificateBinding: ValidatorFn = (
 	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
 		"binding",
 		"certificate_id",
+		"experimental_remote",
 	]);
+
+	if (!isRemoteValid(value, field, diagnostics)) {
+		isValid = false;
+	}
 
 	return isValid;
 };
@@ -3225,6 +3478,39 @@ const validateSecretsStoreSecretBinding: ValidatorFn = (
 		"binding",
 		"store_id",
 		"secret_name",
+	]);
+
+	return isValid;
+};
+
+const validateHelloWorldBinding: ValidatorFn = (diagnostics, field, value) => {
+	if (typeof value !== "object" || value === null) {
+		diagnostics.errors.push(
+			`"unsafe_hello_world" bindings should be objects, but got ${JSON.stringify(value)}`
+		);
+		return false;
+	}
+	let isValid = true;
+	if (!isRequiredProperty(value, "binding", "string")) {
+		diagnostics.errors.push(
+			`"${field}" bindings must have a string "binding" field but got ${JSON.stringify(
+				value
+			)}.`
+		);
+		isValid = false;
+	}
+	if (!isOptionalProperty(value, "enable_timer", "boolean")) {
+		diagnostics.errors.push(
+			`"${field}" bindings must have a boolean "enable_timer" field but got ${JSON.stringify(
+				value
+			)}.`
+		);
+		isValid = false;
+	}
+
+	validateAdditionalProperties(diagnostics, field, Object.keys(value), [
+		"binding",
+		"enable_timer",
 	]);
 
 	return isValid;
@@ -3519,4 +3805,21 @@ function warnIfDurableObjectsHaveNoMigrations(
 			}
 		}
 	}
+}
+
+function isRemoteValid(
+	targetObject: object,
+	fieldPath: string,
+	diagnostics: Diagnostics
+) {
+	if (!isOptionalProperty(targetObject, "experimental_remote", "boolean")) {
+		diagnostics.errors.push(
+			`"${fieldPath}" should, optionally, have a boolean "experimental_remote" field but got ${JSON.stringify(
+				targetObject
+			)}.`
+		);
+		return false;
+	}
+
+	return true;
 }

@@ -85,11 +85,44 @@ function getWorkerTests(opts: { experimental: boolean }): WorkerTestConfig[] {
 				argv: ["--category", "hello-world"],
 			},
 			{
+				template: "hello-world-durable-object",
+				variants: ["ts", "js"],
+				verifyDeploy: {
+					route: "/",
+					expectedText: "Hello, world!",
+				},
+				// There is no preview script
+				verifyPreview: null,
+				argv: ["--category", "hello-world"],
+			},
+			{
+				template: "hello-world-durable-object",
+				variants: ["python"],
+				verifyDeploy: {
+					route: "/",
+					expectedText: "Hello, world!",
+				},
+				// There is no preview script
+				verifyPreview: null,
+				argv: ["--category", "hello-world"],
+			},
+			{
 				template: "hello-world-durable-object-with-assets",
 				variants: ["ts", "js"],
 				verifyDeploy: {
 					route: "/",
 					expectedText: "Hello, World!",
+				},
+				// There is no preview script
+				verifyPreview: null,
+				argv: ["--category", "hello-world"],
+			},
+			{
+				template: "hello-world-durable-object-with-assets",
+				variants: ["python"],
+				verifyDeploy: {
+					route: "/message",
+					expectedText: "Hello, world!",
 				},
 				// There is no preview script
 				verifyPreview: null,
@@ -105,6 +138,19 @@ function getWorkerTests(opts: { experimental: boolean }): WorkerTestConfig[] {
 				// There is no preview script
 				verifyPreview: null,
 				argv: ["--category", "hello-world"],
+			},
+			{
+				template: "hello-world-workflows",
+				argv: ["--category", "hello-world"],
+				variants: ["ts", "js"],
+				verifyDeploy: {
+					route: "/",
+					expectedText: "details",
+				},
+				verifyPreview: {
+					route: "/",
+					expectedText: "details",
+				},
 			},
 			{
 				template: "common",
@@ -131,18 +177,6 @@ function getWorkerTests(opts: { experimental: boolean }): WorkerTestConfig[] {
 				// Skipped for now, since it's not possible to test scheduled events on deployed Workers
 				verifyDeploy: null,
 				verifyPreview: null,
-			},
-			{
-				template: "openapi",
-				variants: [],
-				verifyDeploy: {
-					route: "/",
-					expectedText: "SwaggerUI",
-				},
-				verifyPreview: {
-					route: "/",
-					expectedText: "SwaggerUI",
-				},
 			},
 		];
 	}

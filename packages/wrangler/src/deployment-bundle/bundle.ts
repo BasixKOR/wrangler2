@@ -5,7 +5,6 @@ import * as esbuild from "esbuild";
 import {
 	getBuildConditionsFromEnv,
 	getBuildPlatformFromEnv,
-	getUnenvResolvePathsFromEnv,
 } from "../environment-variables/misc-variables";
 import { UserError } from "../errors";
 import { getFlag } from "../experimental-flags";
@@ -120,6 +119,7 @@ export type BundleOptions = {
 	watch: boolean | undefined;
 	tsconfig: string | undefined;
 	minify: boolean | undefined;
+	keepNames: boolean;
 	nodejsCompatMode: NodeJSCompatMode | undefined;
 	define: Config["define"];
 	alias: Config["alias"];
@@ -134,6 +134,7 @@ export type BundleOptions = {
 	projectRoot: string | undefined;
 	defineNavigatorUserAgent: boolean;
 	external: string[] | undefined;
+	metafile: string | boolean | undefined;
 };
 
 /**
@@ -154,6 +155,7 @@ export async function bundleWorker(
 		watch,
 		tsconfig,
 		minify,
+		keepNames,
 		nodejsCompatMode,
 		alias,
 		define,
@@ -168,6 +170,7 @@ export async function bundleWorker(
 		projectRoot,
 		defineNavigatorUserAgent,
 		external,
+		metafile,
 	}: BundleOptions
 ): Promise<BundleResult> {
 	// We create a temporary directory for any one-off files we
@@ -200,7 +203,7 @@ export async function bundleWorker(
 	}
 
 	if (targetConsumer === "dev" && local) {
-		// In Miniflare 3, we bind the user's worker as a service binding in a
+		// In Miniflare, we bind the user's worker as a service binding in a
 		// special entry worker that handles things like injecting `Request.cf`,
 		// live-reload, and the pretty-error page.
 		//
@@ -345,23 +348,23 @@ export async function bundleWorker(
 		},
 	};
 
-	const unenvResolvePaths = getUnenvResolvePathsFromEnv()?.split(",");
-
 	const buildOptions = {
 		// Don't use entryFile here as the file may have been changed when applying the middleware
 		entryPoints: [entry.file],
 		bundle,
 		absWorkingDir: entry.projectRoot,
-		outdir: destination,
-		keepNames: true,
-		entryNames: entryName || path.parse(entryFile).name,
+		keepNames,
 		...(isOutfile
 			? {
 					outdir: undefined,
 					outfile: destination,
 					entryNames: undefined,
 				}
-			: {}),
+			: {
+					outdir: destination,
+					outfile: undefined,
+					entryNames: entryName || path.parse(entryFile).name,
+				}),
 		inject,
 		external: bundle
 			? ["__STATIC_CONTENT_MANIFEST", ...(external ? external : [])]
@@ -391,10 +394,9 @@ export async function bundleWorker(
 		plugins: [
 			aliasPlugin,
 			moduleCollector.plugin,
-			...(await getNodeJSCompatPlugins({
+			...getNodeJSCompatPlugins({
 				mode: nodejsCompatMode ?? null,
-				unenvResolvePaths,
-			})),
+			}),
 			cloudflareInternalPlugin,
 			buildResultPlugin,
 			...(plugins || []),
@@ -436,6 +438,23 @@ export async function bundleWorker(
 			};
 		} else {
 			result = await esbuild.build(buildOptions);
+
+			// Write the bundle metafile to disk.
+			if (metafile && result.metafile) {
+				let metaFilePath: string;
+
+				if (typeof metafile === "string") {
+					metaFilePath = path.resolve(metafile);
+				} else if (isOutfile) {
+					metaFilePath = `${destination}.bundle-meta.json`;
+				} else {
+					metaFilePath = path.join(destination, "bundle-meta.json");
+				}
+
+				const metaJson = JSON.stringify(result.metafile, null, 2);
+				fs.writeFileSync(metaFilePath, metaJson);
+			}
+
 			// Even when we're not watching, we still want some way of cleaning up the
 			// temporary directory when we don't need it anymore
 			stop = async function () {

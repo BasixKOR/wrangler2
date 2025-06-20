@@ -1,18 +1,19 @@
 import { exit } from "process";
-import { cancel, crash, endSection, log, newline } from "@cloudflare/cli";
+import { cancel, endSection, log, newline } from "@cloudflare/cli";
 import { processArgument } from "@cloudflare/cli/args";
 import { brandColor, dim, yellow } from "@cloudflare/cli/colors";
 import { spinner } from "@cloudflare/cli/interactive";
-import { DeploymentsService } from "../client";
+import { DeploymentsService } from "@cloudflare/containers-shared";
+import { UserError } from "../../errors";
 import { wrap } from "../helpers/wrap";
 import { idToLocationName } from "../locations";
 import { statusToColored } from "./util";
 import type {
 	DeploymentPlacementState,
+	DeploymentV2,
 	Placement,
 	PlacementStatusHealth,
-} from "../client";
-import type { DeploymentV2 } from "../client/models/DeploymentV2";
+} from "@cloudflare/containers-shared";
 
 function ipv6(placement: Placement | undefined) {
 	if (!placement) {
@@ -95,11 +96,10 @@ export async function loadDeployments(
 
 	stop();
 	if (err) {
-		crash(
+		throw new UserError(
 			"There has been an error while loading your deployments: \n " +
 				err.message
 		);
-		return [];
 	}
 
 	const deployments = deploymentsResponse.filter((d) =>

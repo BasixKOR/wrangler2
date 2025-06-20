@@ -1,13 +1,24 @@
+import assert from "node:assert";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import {
+	cleanupContainers,
+	getDevContainerImageName,
+	prepareContainerImagesForDev,
+} from "@cloudflare/containers-shared";
 import chalk from "chalk";
 import { Miniflare, Mutex } from "miniflare";
 import * as MF from "../../dev/miniflare";
+import { getDockerPath } from "../../environment-variables/misc-variables";
 import { logger } from "../../logger";
 import { RuntimeController } from "./BaseController";
 import { castErrorCause } from "./events";
-import { convertBindingsToCfWorkerInitBindings } from "./utils";
+import {
+	convertBindingsToCfWorkerInitBindings,
+	convertCfWorkerInitBindingsToBindings,
+} from "./utils";
 import type { WorkerEntrypointsDefinition } from "../../dev-registry";
+import type { RemoteProxySession } from "../remoteBindings";
 import type {
 	BundleCompleteEvent,
 	BundleStartEvent,
@@ -15,7 +26,8 @@ import type {
 	ReloadCompleteEvent,
 	ReloadStartEvent,
 } from "./events";
-import type { File, StartDevWorkerOptions } from "./types";
+import type { Binding, File, StartDevWorkerOptions } from "./types";
+import type { ContainerDevOptions } from "@cloudflare/containers-shared";
 
 async function getBinaryFileContents(file: File<string | Uint8Array>) {
 	if ("contents" in file) {
@@ -89,6 +101,7 @@ export async function convertToConfigBundle(
 		format: event.bundle.entry.format,
 		compatibilityDate: event.config.compatibilityDate,
 		compatibilityFlags: event.config.compatibilityFlags,
+		complianceRegion: event.config.complianceRegion,
 		bindings,
 		migrations: event.config.migrations,
 		workerDefinitions: event.config.dev?.registry,
@@ -104,7 +117,15 @@ export async function convertToConfigBundle(
 		initialPort: undefined,
 		initialIp: "127.0.0.1",
 		rules: [],
-		inspectorPort: 0,
+		...(event.config.dev.inspector === false
+			? {
+					inspect: false,
+					inspectorPort: undefined,
+				}
+			: {
+					inspect: true,
+					inspectorPort: 0,
+				}),
 		localPersistencePath: event.config.dev.persist,
 		liveReload: event.config.dev?.liveReload ?? false,
 		crons,
@@ -114,12 +135,15 @@ export async function convertToConfigBundle(
 		httpsKeyPath: event.config.dev?.server?.httpsKeyPath,
 		localUpstream: event.config.dev?.origin?.hostname,
 		upstreamProtocol: event.config.dev?.origin?.secure ? "https" : "http",
-		inspect: true,
 		services: bindings.services,
 		serviceBindings: fetchers,
 		bindVectorizeToProd: event.config.dev?.bindVectorizeToProd ?? false,
 		imagesLocalMode: event.config.dev?.imagesLocalMode ?? false,
 		testScheduled: !!event.config.dev.testScheduled,
+		tails: event.config.tailConsumers,
+		containers: event.config.containers,
+		containerBuildId: event.config.dev?.containerBuildId,
+		containerEngine: event.config.dev.containerEngine,
 	};
 }
 
@@ -142,17 +166,76 @@ export class LocalRuntimeController extends RuntimeController {
 	#mutex = new Mutex();
 	#mf?: Miniflare;
 
+	#remoteProxySessionData: {
+		session: RemoteProxySession;
+		remoteBindings: Record<string, Binding>;
+	} | null = null;
+
+	// Set of container images that have been seen in the current dev session.
+	// This is used to clean up containers at the end of the dev session.
+	#containerImageTagsSeen: Set<string> = new Set();
+	// Stored here, so it can be used in `cleanupContainers()`
+	#dockerPath: string | undefined;
+	// If this doesn't match what is in config, trigger a rebuild.
+	// Used for the rebuild hotkey
+	#currentContainerBuildId: string | undefined;
+
 	onBundleStart(_: BundleStartEvent) {
 		// Ignored in local runtime
 	}
 
 	async #onBundleComplete(data: BundleCompleteEvent, id: number) {
 		try {
+			const configBundle = await convertToConfigBundle(data);
+
+			const experimentalRemoteBindings =
+				data.config.dev.experimentalRemoteBindings ?? false;
+
+			if (experimentalRemoteBindings && !data.config.dev?.remote) {
+				// note: mixedMode uses (transitively) LocalRuntimeController, so we need to import
+				// from the module lazily in order to avoid circular dependency issues
+				const { maybeStartOrUpdateRemoteProxySession } = await import(
+					"../remoteBindings"
+				);
+
+				this.#remoteProxySessionData =
+					await maybeStartOrUpdateRemoteProxySession(
+						{
+							name: configBundle.name,
+							bindings:
+								convertCfWorkerInitBindingsToBindings(configBundle.bindings) ??
+								{},
+						},
+						this.#remoteProxySessionData ?? null
+					);
+			}
+
+			// Assemble container options and build if necessary
+			const containerOptions = await getContainerOptions(data.config);
+			this.#dockerPath = data.config.dev?.dockerPath ?? getDockerPath();
+			// keep track of them so we can clean up later
+			for (const container of containerOptions ?? []) {
+				this.#containerImageTagsSeen.add(container.imageTag);
+			}
+			if (
+				containerOptions &&
+				this.#currentContainerBuildId !== data.config.dev.containerBuildId
+			) {
+				logger.log(chalk.dim("⎔ Preparing container image(s)..."));
+				await prepareContainerImagesForDev(this.#dockerPath, containerOptions);
+				this.#currentContainerBuildId = data.config.dev.containerBuildId;
+				// Miniflare will have logged 'Ready on...' before the containers are built, but that is actually the proxy server :/
+				// The actual user worker's miniflare instance is blocked until the containers are built
+				logger.log(chalk.dim("⎔ Container image(s) ready"));
+			}
+
 			const { options, internalObjects, entrypointNames } =
 				await MF.buildMiniflareOptions(
 					this.#log,
-					await convertToConfigBundle(data),
-					this.#proxyToUserWorkerAuthenticationSecret
+					configBundle,
+					this.#proxyToUserWorkerAuthenticationSecret,
+					this.#remoteProxySessionData?.session?.remoteProxyConnectionString,
+					!!experimentalRemoteBindings
 				);
 			options.liveReload = false; // TODO: set in buildMiniflareOptions once old code path is removed
 			if (this.#mf === undefined) {
@@ -168,7 +251,13 @@ export class LocalRuntimeController extends RuntimeController {
 			// `inspectorUrl` for this set of `options`, we protect `#mf` with a mutex,
 			// so only one update can happen at a time.
 			const userWorkerUrl = await this.#mf.ready;
-			const userWorkerInspectorUrl = await this.#mf.getInspectorURL();
+			// TODO: Miniflare should itself return undefined on
+			//       `getInspectorURL` when no inspector is in use
+			//       (currently the function just hangs)
+			const userWorkerInspectorUrl =
+				options.inspectorPort === undefined
+					? undefined
+					: await this.#mf.getInspectorURL();
 			// If we received a new `bundleComplete` event before we were able to
 			// dispatch a `reloadComplete` for this bundle, ignore this bundle.
 			if (id !== this.#currentBundleId) {
@@ -192,12 +281,16 @@ export class LocalRuntimeController extends RuntimeController {
 						hostname: userWorkerUrl.hostname,
 						port: userWorkerUrl.port,
 					},
-					userWorkerInspectorUrl: {
-						protocol: userWorkerInspectorUrl.protocol,
-						hostname: userWorkerInspectorUrl.hostname,
-						port: userWorkerInspectorUrl.port,
-						pathname: `/core:user:${getName(data.config)}`,
-					},
+					...(userWorkerInspectorUrl
+						? {
+								userWorkerInspectorUrl: {
+									protocol: userWorkerInspectorUrl.protocol,
+									hostname: userWorkerInspectorUrl.hostname,
+									port: userWorkerInspectorUrl.port,
+									pathname: `/core:user:${getName(data.config)}`,
+								},
+							}
+						: {}),
 					userWorkerInnerUrlOverrides: {
 						protocol: data.config?.dev?.origin?.secure ? "https:" : "http:",
 						hostname: data.config?.dev?.origin?.hostname,
@@ -243,6 +336,14 @@ export class LocalRuntimeController extends RuntimeController {
 		// Ignored in local runtime
 	}
 
+	cleanupContainers = async () => {
+		assert(
+			this.#dockerPath,
+			"Docker path should have been set if containers are enabled"
+		);
+		await cleanupContainers(this.#dockerPath, this.#containerImageTagsSeen);
+	};
+
 	#teardown = async (): Promise<void> => {
 		logger.debug("LocalRuntimeController teardown beginning...");
 
@@ -252,6 +353,22 @@ export class LocalRuntimeController extends RuntimeController {
 
 		await this.#mf?.dispose();
 		this.#mf = undefined;
+
+		if (this.#containerImageTagsSeen.size > 0) {
+			try {
+				await this.cleanupContainers();
+			} catch (error) {
+				logger.warn(
+					`Failed to clean up containers. You may have to stop and remove them up manually.`
+				);
+			}
+		}
+		if (this.#remoteProxySessionData) {
+			logger.log(chalk.dim("⎔ Shutting down remote connection..."));
+		}
+
+		await this.#remoteProxySessionData?.session?.dispose();
+		this.#remoteProxySessionData = null;
 
 		logger.debug("LocalRuntimeController teardown complete");
 	};
@@ -269,4 +386,36 @@ export class LocalRuntimeController extends RuntimeController {
 	emitReloadCompleteEvent(data: ReloadCompleteEvent) {
 		this.emit("reloadComplete", data);
 	}
+}
+
+/**
+ * @returns Container options suitable for building or pulling images,
+ * with image tag set to well-known dev format.
+ * Undefined if containers are not enabled or not configured.
+ */
+export async function getContainerOptions(
+	config: BundleCompleteEvent["config"]
+) {
+	if (!config.containers?.length || config.dev.enableContainers === false) {
+		return undefined;
+	}
+	// should be defined if containers are enabled
+	assert(
+		config.dev.containerBuildId,
+		"Build ID should be set if containers are enabled and defined"
+	);
+	const containers: ContainerDevOptions[] = [];
+	for (const container of config.containers) {
+		containers.push({
+			image: container.image ?? container.configuration.image,
+			imageTag: getDevContainerImageName(
+				container.class_name,
+				config.dev.containerBuildId
+			),
+			args: container.image_vars,
+			imageBuildContext: container.image_build_context,
+			class_name: container.class_name,
+		});
+	}
+	return containers;
 }
