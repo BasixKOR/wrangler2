@@ -9,7 +9,10 @@ import {
 	convertToConfigBundle,
 	LocalRuntimeController,
 } from "./LocalRuntimeController";
+import { convertCfWorkerInitBindingsToBindings } from "./utils";
+import type { RemoteProxySession } from "../remoteBindings";
 import type { BundleCompleteEvent } from "./events";
+import type { Binding } from "./index";
 
 // Ensure DO references from other workers have the same SQL setting as the DO definition in it's original Worker
 function ensureMatchingSql(options: MF.Options) {
@@ -62,6 +65,14 @@ export class MultiworkerRuntimeController extends LocalRuntimeController {
 
 	#options = new Map<string, { options: MF.Options; primary: boolean }>();
 
+	#remoteProxySessionsData = new Map<
+		string,
+		{
+			session: RemoteProxySession;
+			remoteBindings: Record<string, Binding>;
+		} | null
+	>();
+
 	#canStartMiniflare() {
 		return (
 			[...this.#options.values()].some((o) => o.primary) &&
@@ -92,10 +103,39 @@ export class MultiworkerRuntimeController extends LocalRuntimeController {
 
 	async #onBundleComplete(data: BundleCompleteEvent, id: number) {
 		try {
+			const configBundle = await convertToConfigBundle(data);
+
+			const experimentalRemoteBindings =
+				data.config.dev.experimentalRemoteBindings;
+
+			if (experimentalRemoteBindings && !data.config.dev?.remote) {
+				// note: mixedMode uses (transitively) LocalRuntimeController, so we need to import
+				// from the module lazily in order to avoid circular dependency issues
+				const { maybeStartOrUpdateRemoteProxySession } = await import(
+					"../remoteBindings"
+				);
+				const remoteProxySession = await maybeStartOrUpdateRemoteProxySession(
+					{
+						name: configBundle.name,
+						bindings:
+							convertCfWorkerInitBindingsToBindings(configBundle.bindings) ??
+							{},
+					},
+					this.#remoteProxySessionsData.get(data.config.name) ?? null
+				);
+				this.#remoteProxySessionsData.set(
+					data.config.name,
+					remoteProxySession ?? null
+				);
+			}
+
 			const { options } = await MF.buildMiniflareOptions(
 				this.#log,
 				await convertToConfigBundle(data),
-				this.#proxyToUserWorkerAuthenticationSecret
+				this.#proxyToUserWorkerAuthenticationSecret,
+				this.#remoteProxySessionsData.get(data.config.name)?.session
+					?.remoteProxyConnectionString,
+				!!experimentalRemoteBindings
 			);
 
 			this.#options.set(data.config.name, {
@@ -207,6 +247,18 @@ export class MultiworkerRuntimeController extends LocalRuntimeController {
 
 		await this.#mf?.dispose();
 		this.#mf = undefined;
+
+		if (this.#remoteProxySessionsData.size > 0) {
+			logger.log(chalk.dim("⎔ Shutting down remote connections..."));
+		}
+
+		await Promise.all(
+			[...this.#remoteProxySessionsData.values()].map(
+				(remoteProxySessionData) => remoteProxySessionData?.session?.dispose()
+			)
+		);
+
+		this.#remoteProxySessionsData.clear();
 
 		logger.debug("MultiworkerRuntimeController teardown complete");
 	};

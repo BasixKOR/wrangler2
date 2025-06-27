@@ -17,6 +17,7 @@ export function buildPluginFromFunctions({
 	routesModule,
 	outdir,
 	minify = false,
+	keepNames = true,
 	sourcemap = false,
 	watch = false,
 	onEnd = () => {},
@@ -30,6 +31,7 @@ export function buildPluginFromFunctions({
 	const entry: Entry = {
 		file: resolve(getBasePath(), "templates/pages-template-plugin.ts"),
 		projectRoot: functionsDirectory,
+		configPath: undefined,
 		format: "modules",
 		moduleRoot: functionsDirectory,
 		exports: [],
@@ -45,6 +47,7 @@ export function buildPluginFromFunctions({
 		inject: [routesModule],
 		entryName: "index",
 		minify,
+		keepNames,
 		sourcemap,
 		watch,
 		// We don't currently have a mechanism for Plugins 'requiring' a specific compat date/flag,
@@ -118,5 +121,6 @@ export function buildPluginFromFunctions({
 		tsconfig: undefined,
 		testScheduled: undefined,
 		isOutfile: undefined,
+		metafile: undefined,
 	});
 }

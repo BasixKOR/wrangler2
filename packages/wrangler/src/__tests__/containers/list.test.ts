@@ -49,7 +49,9 @@ describe("containers list", () => {
 				"*/applications",
 				async ({ request }) => {
 					expect(await request.text()).toEqual("");
-					return HttpResponse.json(MOCK_APPLICATIONS);
+					return HttpResponse.json(
+						`{"success": true, "result": ${JSON.stringify(MOCK_APPLICATIONS, null, 4)}}`
+					);
 				},
 				{ once: true }
 			)
@@ -63,6 +65,7 @@ describe("containers list", () => {
 			        \\"created_at\\": \\"123\\",
 			        \\"account_id\\": \\"test-account\\",
 			        \\"name\\": \\"Test-app\\",
+			        \\"version\\": 1,
 			        \\"configuration\\": {
 			            \\"image\\": \\"test-registry.cfdata.org/test-app:v1\\",
 			            \\"network\\": {
@@ -81,6 +84,7 @@ describe("containers list", () => {
 			        \\"created_at\\": \\"123\\",
 			        \\"account_id\\": \\"test-account\\",
 			        \\"name\\": \\"Test-app\\",
+			        \\"version\\": 1,
 			        \\"configuration\\": {
 			            \\"image\\": \\"test-registry.cfdata.org/test-app:v10\\",
 			            \\"network\\": {
@@ -99,6 +103,7 @@ describe("containers list", () => {
 			        \\"created_at\\": \\"123\\",
 			        \\"account_id\\": \\"test-account\\",
 			        \\"name\\": \\"Test-app\\",
+			        \\"version\\": 1,
 			        \\"configuration\\": {
 			            \\"image\\": \\"test-registry.cfdata.org/test-app:v2\\",
 			            \\"network\\": {

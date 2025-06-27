@@ -1,4 +1,8 @@
-import type { Environment, RawEnvironment } from "./environment";
+import type {
+	ContainerEngine,
+	Environment,
+	RawEnvironment,
+} from "./environment";
 import type { CamelCaseKey } from "yargs";
 
 /**
@@ -65,6 +69,8 @@ export interface ConfigFields<Dev extends RawDevConfig> {
 
 	/**
 	 * Options to configure the development server that your worker will use.
+	 *
+	 * For reference, see https://developers.cloudflare.com/workers/wrangler/configuration/#local-development-settings
 	 */
 	dev: Dev;
 
@@ -73,6 +79,8 @@ export interface ConfigFields<Dev extends RawDevConfig> {
 	 * static assets with your Worker.
 	 *
 	 * More details at https://developers.cloudflare.com/workers/platform/sites
+	 *
+	 * For reference, see https://developers.cloudflare.com/workers/wrangler/configuration/#workers-sites
 	 */
 	site:
 		| {
@@ -152,6 +160,8 @@ export interface ConfigFields<Dev extends RawDevConfig> {
 	/**
 	 * A map of module aliases. Lets you swap out a module for any others.
 	 * Corresponds with esbuild's `alias` config
+	 *
+	 * For reference, see https://developers.cloudflare.com/workers/wrangler/configuration/#module-aliasing
 	 */
 	alias: { [key: string]: string } | undefined;
 
@@ -223,6 +233,21 @@ export interface DevConfig {
 	 * Host to forward requests to, defaults to the host of the first route of project
 	 */
 	host: string | undefined;
+
+	/**
+	 * When developing, whether to build and connect to containers. This requires a Docker daemon to be running.
+	 * Defaults to `true`.
+	 *
+	 * @inheritable
+	 * @default true
+	 */
+	enable_containers: boolean;
+
+	/**
+	 * Either the Docker unix socket i.e. `unix:///var/run/docker.sock` or a full configuration.
+	 * Note that windows is only supported via WSL at the moment
+	 */
+	container_engine: ContainerEngine | undefined;
 }
 
 export type RawDevConfig = Partial<DevConfig>;
@@ -270,6 +295,9 @@ export const defaultWranglerConfig: Config = {
 		local_protocol: "http",
 		upstream_protocol: "http",
 		host: undefined,
+		// Note this one is also workers only
+		enable_containers: true,
+		container_engine: undefined,
 	},
 
 	/** INHERITABLE ENVIRONMENT FIELDS **/
@@ -298,6 +326,7 @@ export const defaultWranglerConfig: Config = {
 	ai: undefined,
 	images: undefined,
 	version_metadata: undefined,
+	unsafe_hello_world: [],
 
 	/*====================================================*/
 	/*           Fields supported by Workers only         */
@@ -326,12 +355,13 @@ export const defaultWranglerConfig: Config = {
 	jsx_fragment: "React.Fragment",
 	migrations: [],
 	triggers: {
-		crons: [],
+		crons: undefined,
 	},
 	rules: [],
 	build: { command: undefined, watch_dir: "./src", cwd: undefined },
 	no_bundle: undefined,
 	minify: undefined,
+	keep_names: undefined,
 	dispatch_namespaces: [],
 	first_party_worker: undefined,
 	logfwdr: { bindings: [] },
@@ -339,6 +369,8 @@ export const defaultWranglerConfig: Config = {
 	upload_source_maps: undefined,
 	assets: undefined,
 	observability: { enabled: true },
+	/** The default here is undefined so that we can delegate to the CLOUDFLARE_COMPLIANCE_REGION environment variable. */
+	compliance_region: undefined,
 
 	/** NON-INHERITABLE ENVIRONMENT FIELDS **/
 	define: {},

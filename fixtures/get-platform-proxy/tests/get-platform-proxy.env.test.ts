@@ -10,7 +10,11 @@ import {
 	vi,
 } from "vitest";
 import { getPlatformProxy } from "./shared";
-import type { Hyperdrive, KVNamespace } from "@cloudflare/workers-types";
+import type {
+	Fetcher,
+	Hyperdrive,
+	KVNamespace,
+} from "@cloudflare/workers-types";
 import type { Unstable_DevWorker } from "wrangler";
 
 type Env = {
@@ -23,9 +27,10 @@ type Env = {
 	MY_BUCKET: R2Bucket;
 	MY_D1: D1Database;
 	MY_HYPERDRIVE: Hyperdrive;
+	ASSETS: Fetcher;
 };
 
-const wranglerTomlFilePath = path.join(__dirname, "..", "wrangler.toml");
+const wranglerConfigFilePath = path.join(__dirname, "..", "wrangler.jsonc");
 
 describe("getPlatformProxy - env", () => {
 	let devWorkers: Unstable_DevWorker[];
@@ -36,9 +41,9 @@ describe("getPlatformProxy - env", () => {
 	});
 
 	describe("var bindings", () => {
-		it("correctly obtains var bindings from both wrangler.toml and .dev.vars", async () => {
+		it("correctly obtains var bindings from both wrangler config and .dev.vars", async () => {
 			const { env, dispose } = await getPlatformProxy<Env>({
-				configPath: wranglerTomlFilePath,
+				configPath: wranglerConfigFilePath,
 			});
 			try {
 				const { MY_VAR, MY_JSON_VAR, MY_DEV_VAR } = env;
@@ -52,22 +57,22 @@ describe("getPlatformProxy - env", () => {
 			}
 		});
 
-		it("correctly makes vars from .dev.vars override the ones in wrangler.toml", async () => {
+		it("correctly makes vars from .dev.vars override the ones in wrangler config", async () => {
 			const { env, dispose } = await getPlatformProxy<Env>({
-				configPath: wranglerTomlFilePath,
+				configPath: wranglerConfigFilePath,
 			});
 			try {
 				const { MY_VAR_A } = env;
-				expect(MY_VAR_A).not.toEqual("my-var-a"); // if this fails, the value was read from wrangler.toml – not .dev.vars
+				expect(MY_VAR_A).not.toEqual("my-var-a"); // if this fails, the value was read from wrangler config – not .dev.vars
 				expect(MY_VAR_A).toEqual("my-dev-var-a");
 			} finally {
 				await dispose();
 			}
 		});
 
-		it("correctly makes vars from .dev.vars not override bindings of the same name from wrangler.toml", async () => {
+		it("correctly makes vars from .dev.vars not override bindings of the same name from wrangler config", async () => {
 			const { env, dispose } = await getPlatformProxy<Env>({
-				configPath: wranglerTomlFilePath,
+				configPath: wranglerConfigFilePath,
 			});
 			try {
 				const { MY_KV } = env;
@@ -123,9 +128,19 @@ describe("getPlatformProxy - env", () => {
 		}
 	});
 
+	it("correctly obtains functioning ASSETS bindings", async () => {
+		const { env, dispose } = await getPlatformProxy<Env>({
+			configPath: wranglerConfigFilePath,
+		});
+		const res = await env.ASSETS.fetch("https://0.0.0.0/test.txt");
+		const text = await res.text();
+		expect(text).toEqual("this is a test text file!\n");
+		await dispose();
+	});
+
 	it("correctly obtains functioning KV bindings", async () => {
 		const { env, dispose } = await getPlatformProxy<Env>({
-			configPath: wranglerTomlFilePath,
+			configPath: wranglerConfigFilePath,
 		});
 		const { MY_KV } = env;
 		let numOfKeys = (await MY_KV.list()).keys.length;
@@ -140,7 +155,7 @@ describe("getPlatformProxy - env", () => {
 
 	it("correctly obtains functioning R2 bindings", async () => {
 		const { env, dispose } = await getPlatformProxy<Env>({
-			configPath: wranglerTomlFilePath,
+			configPath: wranglerConfigFilePath,
 		});
 		try {
 			const { MY_BUCKET } = env;
@@ -158,7 +173,7 @@ describe("getPlatformProxy - env", () => {
 
 	it("correctly obtains functioning D1 bindings", async () => {
 		const { env, dispose } = await getPlatformProxy<Env>({
-			configPath: wranglerTomlFilePath,
+			configPath: wranglerConfigFilePath,
 		});
 		try {
 			const { MY_D1 } = env;
@@ -188,7 +203,7 @@ describe("getPlatformProxy - env", () => {
 	//            workerd itself and would simply not work in a node.js process
 	it("correctly obtains passthrough Hyperdrive bindings", async () => {
 		const { env, dispose } = await getPlatformProxy<Env>({
-			configPath: wranglerTomlFilePath,
+			configPath: wranglerConfigFilePath,
 		});
 		try {
 			const { MY_HYPERDRIVE } = env;
@@ -254,7 +269,7 @@ describe("getPlatformProxy - env", () => {
 	describe("with a target environment", () => {
 		it("should provide bindings targeting a specified environment and also inherit top-level ones", async () => {
 			const { env, dispose } = await getPlatformProxy<Env>({
-				configPath: wranglerTomlFilePath,
+				configPath: wranglerConfigFilePath,
 				environment: "production",
 			});
 			try {
@@ -271,7 +286,7 @@ describe("getPlatformProxy - env", () => {
 
 		it("should not provide bindings targeting an environment when none was specified", async () => {
 			const { env, dispose } = await getPlatformProxy<Env>({
-				configPath: wranglerTomlFilePath,
+				configPath: wranglerConfigFilePath,
 			});
 			try {
 				expect(env.MY_VAR).not.toBe("my-PRODUCTION-var-value");
@@ -287,7 +302,7 @@ describe("getPlatformProxy - env", () => {
 
 		it("should provide secrets targeting a specified environment", async () => {
 			const { env, dispose } = await getPlatformProxy<Env>({
-				configPath: wranglerTomlFilePath,
+				configPath: wranglerConfigFilePath,
 				environment: "production",
 			});
 			try {
@@ -302,7 +317,7 @@ describe("getPlatformProxy - env", () => {
 		it("should error if a non-existent environment is provided", async () => {
 			await expect(
 				getPlatformProxy({
-					configPath: wranglerTomlFilePath,
+					configPath: wranglerConfigFilePath,
 					environment: "non-existent-environment",
 				})
 			).rejects.toThrow(

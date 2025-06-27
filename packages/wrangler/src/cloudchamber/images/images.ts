@@ -1,5 +1,4 @@
 import {
-	crash,
 	endSection,
 	newline,
 	startSection,
@@ -7,13 +6,14 @@ import {
 } from "@cloudflare/cli";
 import { processArgument } from "@cloudflare/cli/args";
 import { brandColor, dim } from "@cloudflare/cli/colors";
-import { pollRegistriesUntilCondition } from "../cli";
 import {
 	ApiError,
 	ImageRegistriesService,
 	ImageRegistryAlreadyExistsError,
 	ImageRegistryNotAllowedError,
-} from "../client";
+} from "@cloudflare/containers-shared";
+import { UserError } from "../../errors";
+import { pollRegistriesUntilCondition } from "../cli";
 import {
 	checkEverythingIsSet,
 	handleFailure,
@@ -22,12 +22,14 @@ import {
 } from "../common";
 import { wrap } from "../helpers/wrap";
 import type { Config } from "../../config";
+import type { containersScope } from "../../containers";
 import type {
 	CommonYargsArgvJSON,
 	CommonYargsArgvSanitizedJSON,
 	StrictYargsOptionsToInterfaceJSON,
 } from "../../yargs-types";
-import type { ImageRegistryPermissions } from "../client";
+import type { cloudchamberScope } from "../common";
+import type { ImageRegistryPermissions } from "@cloudflare/containers-shared";
 
 function configureImageRegistryOptionalYargs(yargs: CommonYargsArgvJSON) {
 	return yargs
@@ -60,7 +62,10 @@ function credentialsImageRegistryYargs(yargs: CommonYargsArgvJSON) {
 		});
 }
 
-export const registriesCommand = (yargs: CommonYargsArgvJSON) => {
+export const registriesCommand = (
+	yargs: CommonYargsArgvJSON,
+	scope: typeof containersScope | typeof cloudchamberScope
+) => {
 	return yargs
 		.command(
 			"configure",
@@ -68,6 +73,7 @@ export const registriesCommand = (yargs: CommonYargsArgvJSON) => {
 			(args) => configureImageRegistryOptionalYargs(args),
 			(args) =>
 				handleFailure(
+					`wrangler cloudchamber registries configure`,
 					async (
 						imageArgs: StrictYargsOptionsToInterfaceJSON<
 							typeof configureImageRegistryOptionalYargs
@@ -91,7 +97,8 @@ export const registriesCommand = (yargs: CommonYargsArgvJSON) => {
 						}
 
 						await handleConfigureImageRegistryCommand(args, config);
-					}
+					},
+					scope
 				)(args)
 		)
 		.command(
@@ -119,6 +126,7 @@ export const registriesCommand = (yargs: CommonYargsArgvJSON) => {
 				// we don't want any kind of spinners
 				args.json = true;
 				return handleFailure(
+					`wrangler cloudchamber registries credentials`,
 					async (
 						imageArgs: StrictYargsOptionsToInterfaceJSON<
 							typeof credentialsImageRegistryYargs
@@ -126,11 +134,9 @@ export const registriesCommand = (yargs: CommonYargsArgvJSON) => {
 						_config
 					) => {
 						if (!imageArgs.pull && !imageArgs.push) {
-							crash(
+							throw new UserError(
 								"You have to specify either --push or --pull in the command."
 							);
-
-							process.exit(1);
 						}
 
 						const credentials =
@@ -145,7 +151,8 @@ export const registriesCommand = (yargs: CommonYargsArgvJSON) => {
 								}
 							);
 						console.log(credentials.password);
-					}
+					},
+					scope
 				)(args);
 			}
 		)
@@ -156,6 +163,7 @@ export const registriesCommand = (yargs: CommonYargsArgvJSON) => {
 			(args) => {
 				args.json = true;
 				return handleFailure(
+					`wrangler cloudchamber registries remove`,
 					async (
 						imageArgs: StrictYargsOptionsToInterfaceJSON<
 							typeof removeImageRegistryYargs
@@ -166,7 +174,8 @@ export const registriesCommand = (yargs: CommonYargsArgvJSON) => {
 							imageArgs.domain
 						);
 						console.log(JSON.stringify(registry, null, 4));
-					}
+					},
+					scope
 				)(args);
 			}
 		)
@@ -176,6 +185,7 @@ export const registriesCommand = (yargs: CommonYargsArgvJSON) => {
 			(args) => args,
 			(args) =>
 				handleFailure(
+					`wrangler cloudchamber registries list`,
 					async (imageArgs: CommonYargsArgvSanitizedJSON, config) => {
 						if (!interactWithUser(imageArgs)) {
 							const registries =
@@ -184,7 +194,8 @@ export const registriesCommand = (yargs: CommonYargsArgvJSON) => {
 							return;
 						}
 						await handleListImageRegistriesCommand(args, config);
-					}
+					},
+					scope
 				)(args)
 		);
 };
@@ -271,24 +282,21 @@ async function handleConfigureImageRegistryCommand(
 		const { error: errString } = err.body as { error: string };
 		switch (errString) {
 			case ImageRegistryAlreadyExistsError.error.IMAGE_REGISTRY_ALREADY_EXISTS:
-				crash("The domain already exists!");
-				break;
+				throw new UserError("The domain already exists!");
 			case ImageRegistryNotAllowedError.error.IMAGE_REGISTRY_NOT_ALLOWED:
-				crash("This domain is not allowed!");
-				break;
+				throw new UserError("This domain is not allowed!");
 			default:
-				crash(
+				throw new UserError(
 					"An unexpected error happened, please try again or send us the error for troubleshooting\n" +
 						errString
 				);
 		}
-
-		return;
 	}
 
 	if (err) {
-		crash("There has been an internal error:", `${JSON.stringify(err)}`);
-		return;
+		throw new UserError(
+			"There has been an internal error: " + JSON.stringify(err)
+		);
 	}
 
 	endSection(

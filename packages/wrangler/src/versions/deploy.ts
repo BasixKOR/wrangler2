@@ -11,7 +11,6 @@ import { fetchResult } from "../cfetch";
 import { createCommand } from "../core/create-command";
 import { UserError } from "../errors";
 import { isNonInteractiveOrCI } from "../is-interactive";
-import { logger } from "../logger";
 import * as metrics from "../metrics";
 import { writeOutput } from "../output";
 import { APIError } from "../parse";
@@ -26,6 +25,7 @@ import {
 	patchNonVersionedScriptSettings,
 } from "./api";
 import type { Config } from "../config";
+import type { ComplianceConfig } from "../environment-variables/misc-variables";
 import type {
 	ApiDeployment,
 	ApiVersion,
@@ -49,6 +49,7 @@ export const versionsDeployCommand = createCommand({
 	},
 	behaviour: {
 		useConfigRedirectIfAvailable: true,
+		warnIfMultipleEnvsConfiguredButNoneSpecified: true,
 	},
 
 	args: {
@@ -119,10 +120,6 @@ export const versionsDeployCommand = createCommand({
 			);
 		}
 
-		if (config.workflows?.length) {
-			logger.once.warn("Workflows is currently in open beta.");
-		}
-
 		const versionCache: VersionCache = new Map();
 		const optionalVersionTraffic = parseVersionSpecs(args);
 
@@ -132,10 +129,11 @@ export const versionsDeployCommand = createCommand({
 			true
 		);
 
-		await printLatestDeployment(accountId, workerName, versionCache);
+		await printLatestDeployment(config, accountId, workerName, versionCache);
 
 		// prompt to confirm or change the versionIds from the args
 		const confirmedVersionsToDeploy = await promptVersionsToDeploy(
+			config,
 			accountId,
 			workerName,
 			[...optionalVersionTraffic.keys()],
@@ -186,6 +184,7 @@ export const versionsDeployCommand = createCommand({
 			startMessage: `Deploying ${confirmedVersionsToDeploy.length} version(s)`,
 			promise() {
 				return createDeployment(
+					config,
 					accountId,
 					workerName,
 					confirmedVersionTraffic,
@@ -194,7 +193,7 @@ export const versionsDeployCommand = createCommand({
 			},
 		});
 
-		await maybePatchSettings(accountId, workerName, config);
+		await maybePatchSettings(config, accountId, workerName);
 
 		const elapsedMilliseconds = Date.now() - start;
 		const elapsedSeconds = elapsedMilliseconds / 1000;
@@ -215,7 +214,7 @@ export const versionsDeployCommand = createCommand({
 		try {
 			const serviceMetaData = await fetchResult<{
 				default_environment: { script: { tag: string } };
-			}>(`/accounts/${accountId}/workers/services/${workerName}`);
+			}>(config, `/accounts/${accountId}/workers/services/${workerName}`);
 			workerTag = serviceMetaData.default_environment.script.tag;
 		} catch {
 			// If the fetch fails then we just output a null for the workerTag.
@@ -236,11 +235,12 @@ export const versionsDeployCommand = createCommand({
  * Prompts the user for confirmation when overwriting the latest deployment, given that it's split.
  */
 export async function confirmLatestDeploymentOverwrite(
+	config: Config,
 	accountId: string,
 	scriptName: string
 ) {
 	try {
-		const latest = await fetchLatestDeployment(accountId, scriptName);
+		const latest = await fetchLatestDeployment(config, accountId, scriptName);
 		if (latest && latest.versions.length >= 2) {
 			const versionCache: VersionCache = new Map();
 
@@ -252,6 +252,7 @@ export async function confirmLatestDeploymentOverwrite(
 			);
 			cli.newline();
 			await printDeployment(
+				config,
 				accountId,
 				scriptName,
 				latest,
@@ -277,6 +278,7 @@ export async function confirmLatestDeploymentOverwrite(
 }
 
 export async function printLatestDeployment(
+	config: Config,
 	accountId: string,
 	workerName: string,
 	versionCache: VersionCache
@@ -284,10 +286,11 @@ export async function printLatestDeployment(
 	const latestDeployment = await spinnerWhile({
 		startMessage: "Fetching latest deployment",
 		async promise() {
-			return fetchLatestDeployment(accountId, workerName);
+			return fetchLatestDeployment(config, accountId, workerName);
 		},
 	});
 	await printDeployment(
+		config,
 		accountId,
 		workerName,
 		latestDeployment,
@@ -297,6 +300,7 @@ export async function printLatestDeployment(
 }
 
 async function printDeployment(
+	config: Config,
 	accountId: string,
 	workerName: string,
 	deployment: ApiDeployment | undefined,
@@ -304,6 +308,7 @@ async function printDeployment(
 	versionCache: VersionCache
 ) {
 	const [versions, traffic] = await fetchDeploymentVersions(
+		config,
 		accountId,
 		workerName,
 		deployment,
@@ -356,6 +361,7 @@ function formatVersions(
  * @returns
  */
 async function promptVersionsToDeploy(
+	complianceConfig: ComplianceConfig,
 	accountId: string,
 	workerName: string,
 	defaultSelectedVersionIds: VersionId[],
@@ -365,8 +371,14 @@ async function promptVersionsToDeploy(
 	await spinnerWhile({
 		startMessage: "Fetching deployable versions",
 		async promise() {
-			await fetchDeployableVersions(accountId, workerName, versionCache);
+			await fetchDeployableVersions(
+				complianceConfig,
+				accountId,
+				workerName,
+				versionCache
+			);
 			await fetchVersions(
+				complianceConfig,
 				accountId,
 				workerName,
 				versionCache,
@@ -547,9 +559,9 @@ async function promptPercentages(
 }
 
 async function maybePatchSettings(
+	config: Config,
 	accountId: string,
-	workerName: string,
-	config: Pick<Config, "logpush" | "tail_consumers" | "observability">
+	workerName: string
 ) {
 	const maybeUndefinedSettings = {
 		logpush: config.logpush,
@@ -572,6 +584,7 @@ async function maybePatchSettings(
 		startMessage: `Syncing non-versioned settings`,
 		async promise() {
 			return await patchNonVersionedScriptSettings(
+				config,
 				accountId,
 				workerName,
 				definedSettings

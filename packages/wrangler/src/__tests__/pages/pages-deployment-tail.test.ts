@@ -21,8 +21,7 @@ import type {
 import type { RequestInit } from "undici";
 import type WebSocket from "ws";
 
-// we want to include the banner to make sure it doesn't show up in the output when
-// when --format=json
+// we want to include the banner to make sure it doesn't show up in the output when --format=json
 vi.unmock("../../wrangler-banner");
 vi.mock("ws", async (importOriginal) => {
 	// eslint-disable-next-line @typescript-eslint/consistent-type-imports
@@ -52,6 +51,7 @@ vi.mock("ws", async (importOriginal) => {
 
 describe("pages deployment tail", () => {
 	runInTempDir();
+	const { setIsTTY } = useMockIsTTY();
 
 	let api: MockAPI;
 	afterEach(async () => {
@@ -64,11 +64,6 @@ describe("pages deployment tail", () => {
 	mockAccountId();
 	mockApiToken();
 	const std = mockConsoleMethods();
-
-	beforeEach(() => {
-		// Force the CLI to be "non-interactive" in test env
-		vi.stubEnv("CF_PAGES", "1");
-	});
 
 	/**
 	 * Interaction with the tailing API, including tail creation,
@@ -93,6 +88,23 @@ describe("pages deployment tail", () => {
 			await runWrangler(
 				"pages deployment tail mock-deployment-id --project-name mock-project"
 			);
+
+			await expect(api.ws.connected).resolves.toBeTruthy();
+			expect(api.requests.creation.length).toStrictEqual(1);
+			expect(api.requests.deletion.count).toStrictEqual(0);
+
+			await api.closeHelper();
+			expect(api.requests.deletion.count).toStrictEqual(1);
+			await api.closeHelper();
+		});
+
+		it("only uses deployments with status=success and name=deploy", async () => {
+			setIsTTY(true);
+
+			api = mockTailAPIs("mock-deployment-id");
+			expect(api.requests.creation.length).toStrictEqual(0);
+
+			await runWrangler("pages deployment tail --project-name mock-project");
 
 			await expect(api.ws.connected).resolves.toBeTruthy();
 			expect(api.requests.creation.length).toStrictEqual(1);
@@ -417,8 +429,6 @@ describe("pages deployment tail", () => {
 	});
 
 	describe("printing", () => {
-		const { setIsTTY } = useMockIsTTY();
-
 		it("logs request messages in JSON format", async () => {
 			api = mockTailAPIs();
 			await runWrangler(
@@ -518,8 +528,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				GET https://example.org/ - Ok @ [mock event timestamp]"
 			`);
@@ -550,8 +559,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				\\"* * * * *\\" @ [mock timestamp string] - Ok"
 			`);
@@ -582,8 +590,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				Alarm @ [mock scheduled time] - Ok"
 			`);
@@ -614,8 +621,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				Email from:from@example.com to:to@example.com size:45416 @ [mock event timestamp] - Ok"
 			`);
@@ -646,8 +652,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				Queue my-queue123 (7 messages) - Ok @ [mock timestamp string]"
 			`);
@@ -677,8 +682,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				Unknown Event - Ok @ [mock timestamp string]"
 			`);
@@ -710,8 +714,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				GET https://example.org/ - Ok @ [mock event timestamp]"
 			`);
@@ -772,8 +775,7 @@ describe("pages deployment tail", () => {
 			).toMatchInlineSnapshot(`
 				"
 				 ⛅️ wrangler x.x.x
-				------------------
-
+				──────────────────
 				Connected to deployment mock-deployment-id, waiting for logs...
 				GET https://example.org/ - Ok @ [mock event timestamp]
 				  (log) some string
@@ -903,6 +905,24 @@ function mockListDeployments(): RequestLogger {
 						messages: [],
 						result: [
 							{
+								id: "mock-deployment-id-skipped",
+								url: "https://abc123.mock.pages.dev",
+								environment: "production",
+								created_on: "2020-01-17T14:52:26.133835Z",
+								latest_stage: {
+									ended_on: "2020-01-17T14:52:26.133835Z",
+									status: "skipped",
+									name: "deploy",
+								},
+								deployment_trigger: {
+									metadata: {
+										branch: "main",
+										commit_hash: "11122334c4cb32ad4f65b530b9424e8be5bec9d6",
+									},
+								},
+								project_name: "mock-project",
+							},
+							{
 								id: "mock-deployment-id",
 								url: "https://87bbc8fe.mock.pages.dev",
 								environment: "production",
@@ -910,6 +930,7 @@ function mockListDeployments(): RequestLogger {
 								latest_stage: {
 									ended_on: "2021-11-17T14:52:26.133835Z",
 									status: "success",
+									name: "deploy",
 								},
 								deployment_trigger: {
 									metadata: {
@@ -936,11 +957,13 @@ function mockListDeployments(): RequestLogger {
  *
  * @returns a `RequestCounter` for counting how many times the API is hit
  */
-function mockCreateTailRequest(): RequestInit[] {
+function mockCreateTailRequest(
+	deploymentId: string = ":deploymentId"
+): RequestInit[] {
 	const requests: RequestInit[] = [];
 	msw.use(
 		http.post(
-			`*/accounts/:accountId/pages/projects/:projectName/deployments/:deploymentId/tails`,
+			`*/accounts/:accountId/pages/projects/:projectName/deployments/${deploymentId}/tails`,
 			async ({ request }) => {
 				requests.push((await request.json()) as RequestInit);
 				return HttpResponse.json(
@@ -1037,7 +1060,9 @@ const websocketURL = "ws://localhost:1234";
  * @param websocketURL a fake websocket URL for wrangler to connect to
  * @returns a mocked-out version of the API
  */
-function mockTailAPIs(): MockAPI {
+function mockTailAPIs(
+	expectedCreateDeploymentId: string = ":deploymentId"
+): MockAPI {
 	const api: MockAPI = {
 		requests: {
 			deletion: { count: 0 },
@@ -1069,7 +1094,7 @@ function mockTailAPIs(): MockAPI {
 	api.ws = new MockWebSocketServer(websocketURL);
 	mockWebSockets.push(api.ws);
 
-	api.requests.creation = mockCreateTailRequest();
+	api.requests.creation = mockCreateTailRequest(expectedCreateDeploymentId);
 	api.requests.deletion = mockDeleteTailRequest();
 	api.requests.deployments = mockListDeployments();
 
