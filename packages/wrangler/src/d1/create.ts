@@ -1,23 +1,24 @@
+import dedent from "ts-dedent";
 import { fetchResult } from "../cfetch";
-import { formatConfigSnippet, withConfig } from "../config";
+import { formatConfigSnippet } from "../config";
+import { createCommand } from "../core/create-command";
+import { getD1ExtraLocationChoices } from "../environment-variables/misc-variables";
 import { UserError } from "../errors";
 import { logger } from "../logger";
 import { requireAuth } from "../user";
-import { printWranglerBanner } from "../wrangler-banner";
 import { LOCATION_CHOICES } from "./constants";
-import type {
-	CommonYargsArgv,
-	StrictYargsOptionsToInterface,
-} from "../yargs-types";
+import type { ComplianceConfig } from "../environment-variables/misc-variables";
 import type { DatabaseCreationResult } from "./types";
 
 export async function createD1Database(
+	complianceConfig: ComplianceConfig,
 	accountId: string,
 	name: string,
 	location?: string
 ) {
 	try {
 		return await fetchResult<DatabaseCreationResult>(
+			complianceConfig,
 			`/accounts/${accountId}/d1/database`,
 			{
 				method: "POST",
@@ -39,37 +40,41 @@ export async function createD1Database(
 	}
 }
 
-export function Options(yargs: CommonYargsArgv) {
-	return yargs
-		.positional("name", {
-			describe: "The name of the new DB",
+export const d1CreateCommand = createCommand({
+	metadata: {
+		description: "Create D1 database",
+		status: "stable",
+		owner: "Product: D1",
+	},
+	args: {
+		name: {
 			type: "string",
 			demandOption: true,
-		})
-		.option("location", {
-			describe:
-				"A hint for the primary location of the new DB. Options:\nweur: Western Europe\neeur: Eastern Europe\napac: Asia Pacific\noc: Oceania\nwnam: Western North America\nenam: Eastern North America \n",
+			description: "The name of the new DB",
+		},
+		location: {
 			type: "string",
-		});
-}
+			choices: [
+				...LOCATION_CHOICES,
+				...(getD1ExtraLocationChoices()?.split(",") ?? []),
+			],
+			description: dedent`
+					A hint for the primary location of the new DB. Options:
+						weur: Western Europe
+						eeur: Eastern Europe
+						apac: Asia Pacific
+						oc: Oceania
+						wnam: Western North America
+						enam: Eastern North America
 
-type HandlerOptions = StrictYargsOptionsToInterface<typeof Options>;
-export const Handler = withConfig<HandlerOptions>(
-	async ({ name, config, location }): Promise<void> => {
-		await printWranglerBanner();
+					`,
+		},
+	},
+	positionalArgs: ["name"],
+	async handler({ name, location }, { config }) {
 		const accountId = await requireAuth(config);
 
-		if (location) {
-			if (LOCATION_CHOICES.indexOf(location.toLowerCase()) === -1) {
-				throw new UserError(
-					`Location '${location}' invalid. Valid values are ${LOCATION_CHOICES.join(
-						","
-					)}`
-				);
-			}
-		}
-
-		const db = await createD1Database(accountId, name, location);
+		const db = await createD1Database(config, accountId, name, location);
 
 		logger.log(
 			`✅ Successfully created DB '${db.name}'${
@@ -91,5 +96,5 @@ export const Handler = withConfig<HandlerOptions>(
 				config.configPath
 			)
 		);
-	}
-);
+	},
+});

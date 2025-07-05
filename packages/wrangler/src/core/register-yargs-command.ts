@@ -1,9 +1,11 @@
+import chalk from "chalk";
 import { fetchResult } from "../cfetch";
-import { readConfig } from "../config";
+import { experimental_readRawConfig, readConfig } from "../config";
 import { defaultWranglerConfig } from "../config/config";
 import { FatalError, UserError } from "../errors";
 import { run } from "../experimental-flags";
 import { logger } from "../logger";
+import { dedent } from "../utils/dedent";
 import { isLocal, printResourceLocation } from "../utils/is-local";
 import { printWranglerBanner } from "../wrangler-banner";
 import { demandSingleValue } from "./helpers";
@@ -14,6 +16,7 @@ import type {
 	InternalDefinition,
 	NamedArgDefinitions,
 } from "./types";
+import type { PositionalOptions } from "yargs";
 
 /**
  * Creates a function for registering commands using Yargs.
@@ -34,20 +37,50 @@ export function createRegisterYargsCommand(
 				if (def.type === "command") {
 					const args = def.args ?? {};
 
-					yargs.options(args).epilogue(def.metadata?.epilogue ?? "");
+					const positionalArgs = new Set(def.positionalArgs);
+
+					const nonPositional = Object.fromEntries(
+						Object.entries(args)
+							.filter(([key]) => !positionalArgs.has(key))
+							.map(([name, opts]) => [
+								name,
+								{
+									...opts,
+									group: "group" in opts ? chalk.bold(opts.group) : undefined,
+								},
+							])
+					);
+
+					subYargs
+						.options(nonPositional)
+						.epilogue(def.metadata?.epilogue ?? "")
+						.example(
+							def.metadata.examples?.map((ex) => [
+								ex.command,
+								ex.description,
+							]) ?? []
+						);
+
+					for (const hide of def.metadata.hideGlobalFlags ?? []) {
+						subYargs.hide(hide);
+					}
 
 					// Ensure non-array arguments receive a single value
 					for (const [key, opt] of Object.entries(args)) {
-						if (!opt.array) {
-							yargs.check(demandSingleValue(key));
+						if (!opt.array && opt.type !== "array") {
+							subYargs.check(demandSingleValue(key));
 						}
 					}
 
 					// Register positional arguments
 					for (const key of def.positionalArgs ?? []) {
-						yargs.positional(key, args[key]);
+						subYargs.positional(key, args[key] as PositionalOptions);
 					}
 				} else if (def.type === "namespace") {
+					for (const hide of def.metadata.hideGlobalFlags ?? []) {
+						subYargs.hide(hide);
+					}
+
 					// Hacky way to print --help for incomplete commands
 					// e.g. `wrangler kv namespace` runs `wrangler kv namespace --help`
 					subYargs.command(subHelp);
@@ -57,12 +90,12 @@ export function createRegisterYargsCommand(
 				registerSubTreeCallback();
 			},
 			// Only attach the handler for commands, not namespaces
-			def.type === "command" ? createHandler(def) : undefined
+			def.type === "command" ? createHandler(def, def.command) : undefined
 		);
 	};
 }
 
-function createHandler(def: CommandDefinition) {
+function createHandler(def: CommandDefinition, commandName: string) {
 	return async function handler(args: HandlerArgs<NamedArgDefinitions>) {
 		// eslint-disable-next-line no-useless-catch
 		try {
@@ -122,23 +155,47 @@ function createHandler(def: CommandDefinition) {
 				: {
 						MULTIWORKER: false,
 						RESOURCES_PROVISION: args.experimentalProvision ?? false,
+						REMOTE_BINDINGS: args.experimentalRemoteBindings ?? false,
 					};
 
-			await run(experimentalFlags, () =>
-				def.handler(args, {
-					config:
-						def.behaviour?.provideConfig ?? true
-							? readConfig(args, {
-									hideWarnings: !(def.behaviour?.printConfigWarnings ?? true),
-									useRedirectIfAvailable:
-										def.behaviour?.useConfigRedirectIfAvailable,
-								})
-							: defaultWranglerConfig,
+			await run(experimentalFlags, () => {
+				const config =
+					def.behaviour?.provideConfig ?? true
+						? readConfig(args, {
+								hideWarnings: !(def.behaviour?.printConfigWarnings ?? true),
+								useRedirectIfAvailable:
+									def.behaviour?.useConfigRedirectIfAvailable,
+							})
+						: defaultWranglerConfig;
+
+				if (def.behaviour?.warnIfMultipleEnvsConfiguredButNoneSpecified) {
+					if (!("env" in args) && config.configPath) {
+						const { rawConfig } = experimental_readRawConfig(
+							{
+								config: config.configPath,
+							},
+							{ hideWarnings: true }
+						);
+						const availableEnvs = Object.keys(rawConfig.env ?? {});
+						if (availableEnvs.length > 0) {
+							logger.warn(
+								dedent`
+										Multiple environments are defined in the Wrangler configuration file, but no target environment was specified for the ${commandName.replace(/^wrangler\s+/, "")} command.
+										To avoid unintentional changes to the wrong environment, it is recommended to explicitly specify the target environment using the \`-e|--env\` flag.
+										If your intention is to use the top-level environment of your configuration simply pass an empty string to the flag to target such environment. For example \`--env=""\`.
+									`
+							);
+						}
+					}
+				}
+
+				return def.handler(args, {
+					config,
 					errors: { UserError, FatalError },
 					logger,
 					fetchResult,
-				})
-			);
+				});
+			});
 
 			// TODO(telemetry): send command completed event
 		} catch (err) {

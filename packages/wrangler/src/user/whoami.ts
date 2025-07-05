@@ -1,30 +1,59 @@
 import chalk from "chalk";
 import { fetchPagedListResult, fetchResult } from "../cfetch";
 import { isAuthenticationError } from "../deploy/deploy";
+import { getCloudflareComplianceRegion } from "../environment-variables/misc-variables";
 import { logger } from "../logger";
+import { formatMessage } from "../parse";
 import { fetchMembershipRoles } from "./membership";
-import { getAPIToken, getAuthFromEnv, getScopes } from ".";
+import { DefaultScopeKeys, getAPIToken, getAuthFromEnv, getScopes } from ".";
+import type { ApiCredentials, Scope } from ".";
+import type { ComplianceConfig } from "../environment-variables/misc-variables";
 
-export async function whoami(accountFilter?: string) {
+export async function whoami(
+	complianceConfig: ComplianceConfig,
+	accountFilter?: string
+) {
 	logger.log("Getting User settings...");
-	const user = await getUserInfo();
+	const user = await getUserInfo(complianceConfig);
 	if (!user) {
-		return void logger.log(
-			"You are not authenticated. Please run `wrangler login`."
-		);
+		logger.log("You are not authenticated. Please run `wrangler login`.");
+		return;
 	}
-	if (user.authType === "API Token") {
+	printUserEmail(user);
+	if (
+		user.authType === "User API Token" ||
+		user.authType === "Account API Token"
+	) {
 		logger.log(
-			"ℹ️  The API Token is read from the CLOUDFLARE_API_TOKEN in your environment."
+			"ℹ️  The API Token is read from the CLOUDFLARE_API_TOKEN environment variable."
 		);
 	}
-	await printUserEmail(user);
-	await printAccountList(user);
-	await printTokenPermissions(user);
-	await printMembershipInfo(user, accountFilter);
+	printComplianceRegion(complianceConfig);
+	printAccountList(user);
+	printTokenPermissions(user);
+	await printMembershipInfo(complianceConfig, user, accountFilter);
+}
+
+function printComplianceRegion(complianceConfig: ComplianceConfig) {
+	const complianceRegion = getCloudflareComplianceRegion(complianceConfig);
+	if (complianceRegion !== "public") {
+		const complianceRegionSource = complianceConfig?.compliance_region
+			? "Wrangler configuration"
+			: "`CLOUDFLARE_COMPLIANCE_REGION` environment variable";
+		logger.log(
+			`🌍 The compliance region is set to "${chalk.blue(complianceRegion)}" via the ${complianceRegionSource}.`
+		);
+	}
 }
 
 function printUserEmail(user: UserInfo) {
+	if (user.authType === "Account API Token") {
+		// Account API Tokens only have access to a single account
+		const accountName = user.accounts[0].name;
+		return void logger.log(
+			`👋 You are logged in with an ${user.authType}, associated with the account ${chalk.blue(accountName)}.`
+		);
+	}
 	if (!user.email) {
 		return void logger.log(
 			`👋 You are logged in with an ${user.authType}. Unable to retrieve email for this user. Are you missing the \`User->User Details->Read\` permission?`
@@ -49,19 +78,40 @@ function printTokenPermissions(user: UserInfo) {
 		user.tokenPermissions?.map((scope) => scope.split(":")) ?? [];
 	if (user.authType !== "OAuth Token") {
 		return void logger.log(
-			`🔓 To see token permissions visit https://dash.cloudflare.com/profile/api-tokens.`
+			`🔓 To see token permissions visit https://dash.cloudflare.com/${user.authType === "User API Token" ? "profile" : user.accounts[0].id}/api-tokens.`
 		);
 	}
-	logger.log(
-		`🔓 Token Permissions: If scopes are missing, you may need to logout and re-login.`
-	);
+	logger.log(`🔓 Token Permissions:`);
 	logger.log(`Scope (Access)`);
+
+	// This Set contains all the scopes we expect to see (that Wrangler requests by default)
+	const expectedScopes = new Set(DefaultScopeKeys);
 	for (const [scope, access] of permissions) {
+		// We'll remove scopes from the set of scopes that we expect to see when we see them in the API response
+		expectedScopes.delete(`${scope}:${access}` as Scope);
 		logger.log(`- ${scope} ${access ? `(${access})` : ``}`);
+	}
+
+	// If we've iterated through all scopes in the API response and there are still expected scopes remaining,
+	// then we know that Wrangler may not behave as expected since the current token doesn't have all the expected scopes
+	// Warn, and tell the user how to fix it
+	if (expectedScopes.size > 0) {
+		logger.log("");
+		logger.log(
+			formatMessage({
+				text: "Wrangler is missing some expected Oauth scopes. To fix this, run `wrangler login` to refresh your token. The missing scopes are:",
+				kind: "warning",
+				notes: [...expectedScopes.values()].map((s) => ({ text: `- ${s}` })),
+			})
+		);
 	}
 }
 
-async function printMembershipInfo(user: UserInfo, accountFilter?: string) {
+async function printMembershipInfo(
+	complianceConfig: ComplianceConfig,
+	user: UserInfo,
+	accountFilter?: string
+) {
 	try {
 		if (!accountFilter) {
 			return;
@@ -73,7 +123,10 @@ async function printMembershipInfo(user: UserInfo, accountFilter?: string) {
 		if (!selectedAccount) {
 			return;
 		}
-		const membershipRoles = await fetchMembershipRoles(selectedAccount.id);
+		const membershipRoles = await fetchMembershipRoles(
+			complianceConfig,
+			selectedAccount.id
+		);
 		if (!membershipRoles) {
 			return;
 		}
@@ -95,7 +148,11 @@ async function printMembershipInfo(user: UserInfo, accountFilter?: string) {
 	}
 }
 
-type AuthType = "Global API Key" | "API Token" | "OAuth Token";
+type AuthType =
+	| "Global API Key"
+	| "User API Token"
+	| "Account API Token"
+	| "OAuth Token";
 export interface UserInfo {
 	apiToken: string;
 	authType: AuthType;
@@ -104,32 +161,83 @@ export interface UserInfo {
 	tokenPermissions: string[] | undefined;
 }
 
-export async function getUserInfo(): Promise<UserInfo | undefined> {
+export async function getUserInfo(
+	complianceConfig: ComplianceConfig
+): Promise<UserInfo | undefined> {
 	const apiToken = getAPIToken();
 	if (!apiToken) {
 		return;
 	}
+	const authType = await getAuthType(complianceConfig, apiToken);
 
 	const tokenPermissions = await getTokenPermissions();
 
-	const usingEnvAuth = !!getAuthFromEnv();
-	const usingGlobalAuthKey = "authKey" in apiToken;
 	return {
-		apiToken: usingGlobalAuthKey ? apiToken.authKey : apiToken.apiToken,
-		authType: usingGlobalAuthKey
-			? "Global API Key"
-			: usingEnvAuth
-				? "API Token"
-				: "OAuth Token",
-		email: "authEmail" in apiToken ? apiToken.authEmail : await getEmail(),
-		accounts: await getAccounts(),
+		apiToken: "authKey" in apiToken ? apiToken.authKey : apiToken.apiToken,
+		authType,
+		email:
+			"authEmail" in apiToken
+				? apiToken.authEmail
+				: await getEmail(complianceConfig),
+		accounts: await getAccounts(complianceConfig),
 		tokenPermissions,
 	};
 }
 
-async function getEmail(): Promise<string | undefined> {
+/**
+ * What method is the current Wrangler session authenticated through?
+ */
+async function getAuthType(
+	complianceConfig: ComplianceConfig,
+	credentials: ApiCredentials
+): Promise<AuthType> {
+	if ("authKey" in credentials) {
+		return "Global API Key";
+	}
+
+	const usingEnvAuth = !!getAuthFromEnv();
+	if (!usingEnvAuth) {
+		return "OAuth Token";
+	}
+
+	const tokenType = await getTokenType(complianceConfig);
+	if (tokenType === "account") {
+		return "Account API Token";
+	} else {
+		return "User API Token";
+	}
+}
+
+/**
+ * Is the current API token account scoped or user scoped?
+ */
+async function getTokenType(
+	complianceConfig: ComplianceConfig
+): Promise<"user" | "account"> {
 	try {
-		const { email } = await fetchResult<{ email: string }>("/user");
+		// Try verifying the current token as a user scoped API token
+		await fetchResult<{ id: string }>(complianceConfig, "/user/tokens/verify");
+
+		// If the call succeeds, the token is user scoped
+		return "user";
+	} catch (e) {
+		// This is an "Invalid API Token" error, which indicates that the current token is _not_ user scoped
+		if ((e as { code?: number }).code === 1000) {
+			return "account";
+		}
+		// Some other API error? This isn't expected in normal usage
+		throw e;
+	}
+}
+
+async function getEmail(
+	complianceConfig: ComplianceConfig
+): Promise<string | undefined> {
+	try {
+		const { email } = await fetchResult<{ email: string }>(
+			complianceConfig,
+			"/user"
+		);
 		return email;
 	} catch (e) {
 		const unauthorizedAccess = 9109;
@@ -143,8 +251,10 @@ async function getEmail(): Promise<string | undefined> {
 
 type AccountInfo = { name: string; id: string };
 
-async function getAccounts(): Promise<AccountInfo[]> {
-	return await fetchPagedListResult<AccountInfo>("/accounts");
+async function getAccounts(
+	complianceConfig: ComplianceConfig
+): Promise<AccountInfo[]> {
+	return await fetchPagedListResult<AccountInfo>(complianceConfig, "/accounts");
 }
 
 async function getTokenPermissions(): Promise<string[] | undefined> {

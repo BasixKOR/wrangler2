@@ -27,17 +27,14 @@ describe("containers list", () => {
 		expect(std.out).toMatchInlineSnapshot(`
 			"wrangler containers list
 
-			list containers
+			List containers
 
 			GLOBAL FLAGS
 			  -c, --config   Path to Wrangler configuration file  [string]
 			      --cwd      Run as if Wrangler was started in the specified directory instead of the current working directory  [string]
 			  -e, --env      Environment to use for operations, and for selecting .env and .dev.vars files  [string]
 			  -h, --help     Show help  [boolean]
-			  -v, --version  Show version number  [boolean]
-
-			OPTIONS
-			      --json  Return output as clean JSON  [boolean] [default: false]"
+			  -v, --version  Show version number  [boolean]"
 		`);
 	});
 
@@ -49,7 +46,9 @@ describe("containers list", () => {
 				"*/applications",
 				async ({ request }) => {
 					expect(await request.text()).toEqual("");
-					return HttpResponse.json(MOCK_APPLICATIONS);
+					return HttpResponse.json(
+						`{"success": true, "result": ${JSON.stringify(MOCK_APPLICATIONS, null, 4)}}`
+					);
 				},
 				{ once: true }
 			)
@@ -63,6 +62,7 @@ describe("containers list", () => {
 			        \\"created_at\\": \\"123\\",
 			        \\"account_id\\": \\"test-account\\",
 			        \\"name\\": \\"Test-app\\",
+			        \\"version\\": 1,
 			        \\"configuration\\": {
 			            \\"image\\": \\"test-registry.cfdata.org/test-app:v1\\",
 			            \\"network\\": {
@@ -81,6 +81,7 @@ describe("containers list", () => {
 			        \\"created_at\\": \\"123\\",
 			        \\"account_id\\": \\"test-account\\",
 			        \\"name\\": \\"Test-app\\",
+			        \\"version\\": 1,
 			        \\"configuration\\": {
 			            \\"image\\": \\"test-registry.cfdata.org/test-app:v10\\",
 			            \\"network\\": {
@@ -99,6 +100,7 @@ describe("containers list", () => {
 			        \\"created_at\\": \\"123\\",
 			        \\"account_id\\": \\"test-account\\",
 			        \\"name\\": \\"Test-app\\",
+			        \\"version\\": 1,
 			        \\"configuration\\": {
 			            \\"image\\": \\"test-registry.cfdata.org/test-app:v2\\",
 			            \\"network\\": {

@@ -18,13 +18,22 @@ import {
 	objectEntryWorker,
 	Plugin,
 	ProxyNodeBinding,
+	RemoteProxyConnectionString,
 	SERVICE_LOOPBACK,
 } from "../shared";
 
 export const QueuesOptionsSchema = z.object({
 	queueProducers: z
 		.union([
-			z.record(QueueProducerOptionsSchema),
+			z.record(
+				QueueProducerOptionsSchema.merge(
+					z.object({
+						remoteProxyConnectionString: z
+							.custom<RemoteProxyConnectionString>()
+							.optional(),
+					})
+				)
+			),
 			z.string().array(),
 			z.record(z.string()),
 		])

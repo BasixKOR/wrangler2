@@ -6,11 +6,10 @@ import parseChangeset from "@changesets/parse";
 if (require.main === module) {
 	if (isWranglerPatch(process.env.FILES as string)) {
 		// Create a new branch for the v3 maintenance PR
-		execSync(`git checkout -b v3-maintenance-${process.env.PR_NUMBER} -f`);
+		const branch = `v3-backport-${process.env.PR_NUMBER}`;
+		execSync(`git checkout -b ${branch} -f`);
 
-		execSync(
-			`git rebase --onto origin/v3-maintenance origin/main v3-maintenance-${process.env.PR_NUMBER}`
-		);
+		execSync(`git rebase --onto origin/v3-maintenance origin/main ${branch}`);
 
 		execSync(`git push origin HEAD --force`);
 
@@ -23,9 +22,10 @@ if (require.main === module) {
 					`create`,
 					`--base`,
 					`v3-maintenance`,
-					`--head v3-maintenance-${process.env.PR_NUMBER}`,
+					`--head ${branch}`,
 					`--label "skip-pr-description-validation"`,
 					`--label "skip-v3-pr"`,
+					`--label "v3-backport"`,
 					`--title "V3 Backport [#${process.env.PR_NUMBER}]: ${process.env.PR_TITLE?.slice(1, -1)}"`,
 					`--body "This is an automatically opened PR to backport patch changes from #${process.env.PR_NUMBER} to Wrangler v3"`,
 					`--draft`,

@@ -5,7 +5,7 @@ import { CLOUDFLARE_ACCOUNT_ID } from "./helpers/account-id";
 import { makeRoot, seed } from "./helpers/setup";
 import { WRANGLER_IMPORT } from "./helpers/wrangler";
 
-describe("switching runtimes", () => {
+describe.skipIf(!CLOUDFLARE_ACCOUNT_ID)("switching runtimes", () => {
 	let root: string;
 	beforeEach(async () => {
 		root = await makeRoot();
@@ -88,7 +88,7 @@ describe("switching runtimes", () => {
             `,
 			"package.json": dedent`
                 {
-                    "name": "ai-app",
+                    "name": "dev-env-app",
                     "version": "0.0.0",
                     "private": true
                 }

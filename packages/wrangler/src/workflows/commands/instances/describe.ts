@@ -22,6 +22,7 @@ import type {
 	InstanceStatusAndLogs,
 	InstanceStepLog,
 	InstanceTerminateLog,
+	InstanceWaitForEventLog,
 } from "../../types";
 
 export const workflowsInstancesDescribeCommand = createCommand({
@@ -43,7 +44,8 @@ export const workflowsInstancesDescribeCommand = createCommand({
 			describe:
 				"ID of the instance - instead of an UUID you can type 'latest' to get the latest instance and describe it",
 			type: "string",
-			demandOption: true,
+			demandOption: false,
+			default: "latest",
 		},
 		"step-output": {
 			describe:
@@ -66,6 +68,7 @@ export const workflowsInstancesDescribeCommand = createCommand({
 		if (id == "latest") {
 			const instances = (
 				await fetchResult<Instance[]>(
+					config,
 					`/accounts/${accountId}/workflows/${args.name}/instances`
 				)
 			).sort((a, b) => b.created_on.localeCompare(a.created_on));
@@ -77,10 +80,12 @@ export const workflowsInstancesDescribeCommand = createCommand({
 				return;
 			}
 
+			logRaw("Describing latest instance:");
 			id = instances[0].id;
 		}
 
 		const instance = await fetchResult<InstanceStatusAndLogs>(
+			config,
 			`/accounts/${accountId}/workflows/${args.name}/instances/${id}`
 		);
 
@@ -140,12 +145,20 @@ export const workflowsInstancesDescribeCommand = createCommand({
 
 function logStep(
 	args: typeof workflowsInstancesDescribeCommand.args,
-	step: InstanceStepLog | InstanceSleepLog | InstanceTerminateLog
+	step:
+		| InstanceStepLog
+		| InstanceSleepLog
+		| InstanceTerminateLog
+		| InstanceWaitForEventLog
 ) {
 	logRaw("");
 	const formattedStep: Record<string, string> = {};
 
-	if (step.type == "sleep" || step.type == "step") {
+	if (
+		step.type == "sleep" ||
+		step.type == "step" ||
+		step.type == "waitForEvent"
+	) {
 		formattedStep.Name = step.name;
 		formattedStep.Type = emojifyStepType(step.type);
 
@@ -197,6 +210,9 @@ function logStep(
 					`${retryDate.toLocaleString()} (in ${formatDistanceToNowStrict(retryDate)} from now)`;
 			}
 		}
+	}
+
+	if (step.type == "step" || step.type == "waitForEvent") {
 		if (step.output !== undefined && args.stepOutput) {
 			let output: string;
 			try {
@@ -212,7 +228,7 @@ function logStep(
 		}
 	}
 
-	logRaw(formatLabelledValues(formattedStep, { indentationCount: 2 }));
+	logger.log(formatLabelledValues(formattedStep, { indentationCount: 2 }));
 
 	if (step.type == "step") {
 		const prettyAttempts = step.attempts.map((val) => {

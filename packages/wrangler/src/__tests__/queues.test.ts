@@ -160,14 +160,14 @@ describe("wrangler", () => {
 
 				expect(std.err).toMatchInlineSnapshot(`""`);
 				expect(std.out).toMatchInlineSnapshot(`
-			"┌──────────────────────────────────┬─────────┬────────────┬─────────────┬───────────┬───────────┐
-			│ id                               │ name    │ created_on │ modified_on │ producers │ consumers │
-			├──────────────────────────────────┼─────────┼────────────┼─────────────┼───────────┼───────────┤
-			│ 5e1b9969eb974d8c99c48d19df104c7a │ queue-1 │ 01-01-2001 │ 01-01-2001  │ 0         │ 0         │
-			├──────────────────────────────────┼─────────┼────────────┼─────────────┼───────────┼───────────┤
-			│ def19fa3787741579c9088eb850474af │ queue-2 │ 01-01-2001 │ 01-01-2001  │ 0         │ 0         │
-			└──────────────────────────────────┴─────────┴────────────┴─────────────┴───────────┴───────────┘"
-		`);
+					"┌─┬─┬─┬─┬─┬─┐
+					│ id │ name │ created_on │ modified_on │ producers │ consumers │
+					├─┼─┼─┼─┼─┼─┤
+					│ 5e1b9969eb974d8c99c48d19df104c7a │ queue-1 │ 01-01-2001 │ 01-01-2001 │ 0 │ 0 │
+					├─┼─┼─┼─┼─┼─┤
+					│ def19fa3787741579c9088eb850474af │ queue-2 │ 01-01-2001 │ 01-01-2001 │ 0 │ 0 │
+					└─┴─┴─┴─┴─┴─┘"
+				`);
 			});
 
 			it("should list queues using --page=2", async () => {
@@ -192,12 +192,12 @@ describe("wrangler", () => {
 
 				expect(std.err).toMatchInlineSnapshot(`""`);
 				expect(std.out).toMatchInlineSnapshot(`
-			"┌───────────────────────────────────┬───────────┬────────────┬─────────────┬───────────┬───────────┐
-			│ id                                │ name      │ created_on │ modified_on │ producers │ consumers │
-			├───────────────────────────────────┼───────────┼────────────┼─────────────┼───────────┼───────────┤
-			│ 7f7c2df28cee49ad-bbb46c9e5426e850 │ queue-100 │ 01-01-2001 │ 01-01-2001  │ 0         │ 0         │
-			└───────────────────────────────────┴───────────┴────────────┴─────────────┴───────────┴───────────┘"
-		`);
+					"┌─┬─┬─┬─┬─┬─┐
+					│ id │ name │ created_on │ modified_on │ producers │ consumers │
+					├─┼─┼─┼─┼─┼─┤
+					│ 7f7c2df28cee49ad-bbb46c9e5426e850 │ queue-100 │ 01-01-2001 │ 01-01-2001 │ 0 │ 0 │
+					└─┴─┴─┴─┴─┴─┘"
+				`);
 			});
 		});
 
@@ -293,49 +293,6 @@ describe("wrangler", () => {
 				});
 			});
 
-			it("should show link to dash when not enabled", async () => {
-				const queueName = "testQueue";
-				msw.use(
-					http.post(
-						"*/accounts/:accountId/queues",
-						async ({ params }) => {
-							expect(params.accountId).toEqual("some-account-id");
-							return HttpResponse.json(
-								{
-									success: false,
-									errors: [
-										{
-											message: "workers.api.error.unauthorized",
-											code: 10023,
-										},
-									],
-									messages: [],
-								},
-								{ status: 403 }
-							);
-						},
-						{ once: true }
-					)
-				);
-
-				await expect(
-					runWrangler(`queues create ${queueName}`)
-				).rejects.toThrowError();
-				expect(std.out).toMatchInlineSnapshot(`
-          "🌀 Creating queue 'testQueue'
-          Queues is not currently enabled on this account. Go to https://dash.cloudflare.com/some-account-id/workers/queues to enable it.
-
-          [31mX [41;31m[[41;97mERROR[41;31m][0m [1mA request to the Cloudflare API (/accounts/some-account-id/queues) failed.[0m
-
-            workers.api.error.unauthorized [code: 10023]
-
-            If you think this is a bug, please open an issue at:
-            [4mhttps://github.com/cloudflare/workers-sdk/issues/new/choose[0m
-
-          "
-        `);
-			});
-
 			it("should show an error when two delivery delays are set", async () => {
 				const requests = mockCreateRequest("testQueue", { delivery_delay: 0 });
 
@@ -344,7 +301,7 @@ describe("wrangler", () => {
 						"queues create testQueue --delivery-delay-secs=5 --delivery-delay-secs=10"
 					)
 				).rejects.toThrowErrorMatchingInlineSnapshot(
-					`[Error: Cannot specify --delivery-delay-secs multiple times]`
+					`[Error: The argument "--delivery-delay-secs" expects a single value, but received multiple: [5,10].]`
 				);
 
 				expect(requests.count).toEqual(0);
@@ -409,7 +366,7 @@ describe("wrangler", () => {
 						"queues create testQueue --message-retention-period-secs=70 --message-retention-period-secs=80"
 					)
 				).rejects.toThrowErrorMatchingInlineSnapshot(
-					`[Error: Cannot specify --message-retention-period-secs multiple times]`
+					`[Error: The argument "--message-retention-period-secs" expects a single value, but received multiple: [70,80].]`
 				);
 
 				expect(requests.count).toEqual(0);
@@ -576,7 +533,7 @@ describe("wrangler", () => {
 						"queues update testQueue --message-retention-period-secs=70 --message-retention-period-secs=80"
 					)
 				).rejects.toThrowErrorMatchingInlineSnapshot(
-					`[Error: Cannot specify --message-retention-period-secs multiple times]`
+					`[Error: The argument "--message-retention-period-secs" expects a single value, but received multiple: [70,80].]`
 				);
 
 				expect(requests.count).toEqual(0);
@@ -597,7 +554,7 @@ describe("wrangler", () => {
 						"queues update testQueue --delivery-delay-secs=5 --delivery-delay-secs=10"
 					)
 				).rejects.toThrowErrorMatchingInlineSnapshot(
-					`[Error: Cannot specify --delivery-delay-secs multiple times]`
+					`[Error: The argument "--delivery-delay-secs" expects a single value, but received multiple: [5,10].]`
 				);
 
 				expect(requests.count).toEqual(0);
@@ -959,7 +916,7 @@ describe("wrangler", () => {
 							"queues consumer add testQueue testScript --env myEnv --batch-size 20 --batch-timeout 10 --message-retries 3 --max-concurrency 3 --dead-letter-queue myDLQ --retry-delay-secs=5 --retry-delay-secs=10"
 						)
 					).rejects.toThrowErrorMatchingInlineSnapshot(
-						`[Error: Cannot specify --retry-delay-secs multiple times]`
+						`[Error: The argument "--retry-delay-secs" expects a single value, but received multiple: [5,10].]`
 					);
 
 					expect(requests.count).toEqual(0);

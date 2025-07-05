@@ -1,6 +1,4 @@
 import {
-	cancel,
-	crash,
 	endSection,
 	log,
 	logRaw,
@@ -9,23 +7,27 @@ import {
 	success,
 	updateStatus,
 } from "@cloudflare/cli";
-import { processArgument } from "@cloudflare/cli/args";
 import { bold, brandColor, dim, green, red } from "@cloudflare/cli/colors";
-import { formatConfigSnippet } from "../config";
 import {
 	ApiError,
 	ApplicationsService,
+	CreateApplicationRolloutRequest,
 	DeploymentMutationError,
+	getCloudflareContainerRegistry,
+	InstanceType,
+	RolloutsService,
 	SchedulingPolicy,
-} from "./client";
-import { promiseSpinner } from "./common";
+} from "@cloudflare/containers-shared";
+import { formatConfigSnippet } from "../config";
+import { FatalError, UserError } from "../errors";
+import { getAccountId } from "../user";
+import { cleanForInstanceType, promiseSpinner } from "./common";
 import { diffLines } from "./helpers/diff";
-import { wrap } from "./helpers/wrap";
 import type { Config } from "../config";
-import type { ContainerApp } from "../config/environment";
+import type { ContainerApp, Observability } from "../config/environment";
 import type {
-	CommonYargsArgvJSON,
-	StrictYargsOptionsToInterfaceJSON,
+	CommonYargsArgv,
+	StrictYargsOptionsToInterface,
 } from "../yargs-types";
 import type {
 	Application,
@@ -33,11 +35,42 @@ import type {
 	ApplicationName,
 	CreateApplicationRequest,
 	ModifyApplicationRequestBody,
+	ModifyDeploymentV2RequestBody,
+	Observability as ObservabilityConfiguration,
 	UserDeploymentConfiguration,
-} from "./client";
+} from "@cloudflare/containers-shared";
 import type { JsonMap } from "@iarna/toml";
 
-export function applyCommandOptionalYargs(yargs: CommonYargsArgvJSON) {
+function mergeDeep<T>(target: T, source: Partial<T>): T {
+	if (typeof target !== "object" || target === null) {
+		return source as T;
+	}
+
+	if (typeof source !== "object" || source === null) {
+		return target;
+	}
+
+	const result: T = { ...target };
+
+	for (const key of Object.keys(source)) {
+		const srcVal = source[key as keyof T];
+		const tgtVal = target[key as keyof T];
+
+		if (isObject(tgtVal) && isObject(srcVal)) {
+			result[key as keyof T] = mergeDeep(tgtVal, srcVal as Partial<T[keyof T]>);
+		} else {
+			result[key as keyof T] = srcVal as T[keyof T];
+		}
+	}
+
+	return result;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function applyCommandOptionalYargs(yargs: CommonYargsArgv) {
 	return yargs.option("skip-defaults", {
 		requiresArg: true,
 		type: "boolean",
@@ -51,7 +84,8 @@ function createApplicationToModifyApplication(
 ): ModifyApplicationRequestBody {
 	return {
 		configuration: req.configuration,
-		instances: req.instances,
+		instances: req.max_instances !== undefined ? 0 : req.instances,
+		max_instances: req.max_instances,
 		constraints: req.constraints,
 		affinities: req.affinities,
 		scheduling_policy: req.scheduling_policy,
@@ -61,29 +95,135 @@ function createApplicationToModifyApplication(
 function applicationToCreateApplication(
 	application: Application
 ): CreateApplicationRequest {
-	return {
+	const app: CreateApplicationRequest = {
 		configuration: application.configuration,
 		constraints: application.constraints,
+		max_instances: application.max_instances,
 		name: application.name,
 		scheduling_policy: application.scheduling_policy,
 		affinities: application.affinities,
-		instances: application.instances,
+		instances:
+			application.max_instances !== undefined ? 0 : application.instances,
 		jobs: application.jobs ? true : undefined,
+		durable_objects: application.durable_objects,
 	};
+	return app;
+}
+
+function cleanupObservability(
+	observability: ObservabilityConfiguration | undefined
+) {
+	if (observability === undefined) {
+		return;
+	}
+
+	// `logging` field is deprecated, so if the server returns both `logging` and `logs`
+	// fields, drop the `logging` one.
+	if (observability.logging !== undefined && observability.logs !== undefined) {
+		delete observability.logging;
+	}
+}
+
+function observabilityToConfiguration(
+	observability: Observability | undefined,
+	existingObservabilityConfig: ObservabilityConfiguration | undefined
+): ObservabilityConfiguration | undefined {
+	// Let's use logs for the sake of simplicity of explanation.
+	//
+	// The first column specifies if logs are enabled in the current Wrangler config.
+	// The second column specifies if logs are currently enabled for the application.
+	// The third column specifies what the expected function result should be so that
+	// diff is minimal.
+	//
+	// | Wrangler  | Existing  | Result    |
+	// | --------- | --------- | --------- |
+	// | undefined | undefined | undefined |
+	// | undefined | false     | false     |
+	// | undefined | true      | false     |
+	// | false     | undefined | undefined |
+	// | false     | false     | false     |
+	// | false     | true      | false     |
+	// | true      | undefined | true      |
+	// | true      | false     | true      |
+	// | true      | true      | true      |
+	//
+	// Because the result is the same for Wrangler undefined and false, the table may be
+	// compressed as follows:
+
+	//
+	// | Wrangler          | Existing                 | Result    |
+	// | ----------------- | ------------------------ | --------- |
+	// | false / undefined | undefined                | undefined |
+	// | false / undefined | false / true             | false     |
+	// | true              | undefined / false / true | true      |
+
+	const observabilityLogsEnabled =
+		observability?.logs?.enabled === true ||
+		(observability?.enabled === true && observability?.logs?.enabled !== false);
+	const logsAlreadyEnabled = existingObservabilityConfig?.logs?.enabled;
+
+	if (observabilityLogsEnabled) {
+		return { logs: { enabled: true } };
+	} else {
+		if (logsAlreadyEnabled === undefined) {
+			return undefined;
+		} else {
+			return { logs: { enabled: false } };
+		}
+	}
+}
+
+function containerAppToInstanceType(
+	containerApp: ContainerApp
+): InstanceType | undefined {
+	if (containerApp.instance_type !== undefined) {
+		return containerApp.instance_type as InstanceType;
+	}
+
+	// if no other configuration is set, we fall back to the default "dev" instance type
+	const configuration =
+		containerApp.configuration as UserDeploymentConfiguration;
+	if (
+		configuration.disk === undefined &&
+		configuration.vcpu === undefined &&
+		configuration.memory === undefined &&
+		configuration.memory_mib === undefined
+	) {
+		return InstanceType.DEV;
+	}
 }
 
 function containerAppToCreateApplication(
 	containerApp: ContainerApp,
+	observability: Observability | undefined,
+	existingApp: Application | undefined,
 	skipDefaults = false
 ): CreateApplicationRequest {
-	const configuration =
-		containerApp.configuration as UserDeploymentConfiguration;
-	const app = {
+	const observabilityConfiguration = observabilityToConfiguration(
+		observability,
+		existingApp?.configuration.observability
+	);
+	const instanceType = containerAppToInstanceType(containerApp);
+	const configuration: UserDeploymentConfiguration = {
+		...(containerApp.configuration as UserDeploymentConfiguration),
+		observability: observabilityConfiguration,
+		instance_type: instanceType,
+	};
+
+	// this should have been set to a default value of worker-name-class-name if unspecified by the user
+	if (containerApp.name === undefined) {
+		throw new FatalError("Container application name failed to be set", 1, {
+			telemetryMessage: true,
+		});
+	}
+	const app: CreateApplicationRequest = {
 		...containerApp,
+		name: containerApp.name,
 		configuration,
+		instances: containerApp.instances ?? 0,
 		scheduling_policy:
 			(containerApp.scheduling_policy as SchedulingPolicy) ??
-			SchedulingPolicy.REGIONAL,
+			SchedulingPolicy.DEFAULT,
 		constraints: {
 			...(containerApp.constraints ??
 				(!skipDefaults ? { tier: 1 } : undefined)),
@@ -99,6 +239,11 @@ function containerAppToCreateApplication(
 	// delete the fields that should not be sent to API
 	delete (app as Record<string, unknown>)["class_name"];
 	delete (app as Record<string, unknown>)["image"];
+	delete (app as Record<string, unknown>)["image_build_context"];
+	delete (app as Record<string, unknown>)["image_vars"];
+	delete (app as Record<string, unknown>)["rollout_step_percentage"];
+	delete (app as Record<string, unknown>)["rollout_kind"];
+	delete (app as Record<string, unknown>)["instance_type"];
 
 	return app;
 }
@@ -272,12 +417,39 @@ function sortObjectRecursive<T = Record<string | number, unknown>>(
 	return sortObjectKeys(objectCopy) as T;
 }
 
-/**
- * applyCommand is able to take the wrangler.toml file and render the changes that it
- * detects.
- */
-export async function applyCommand(
-	args: StrictYargsOptionsToInterfaceJSON<typeof applyCommandOptionalYargs>,
+// Resolve an image name to the full unambiguous name.
+//
+// For now, this only converts images stored in the managed registry to contain
+// the user's account ID in the path.
+async function resolveImageName(
+	config: Config,
+	image: string
+): Promise<string> {
+	let url: URL;
+	try {
+		url = new URL(`http://${image}`);
+	} catch (_) {
+		return image;
+	}
+
+	if (url.hostname !== getCloudflareContainerRegistry()) {
+		return image;
+	}
+
+	const accountId = config.account_id || (await getAccountId(config));
+	if (url.pathname.startsWith(`/${accountId}`)) {
+		return image;
+	}
+
+	return `${url.hostname}/${accountId}${url.pathname}`;
+}
+
+export async function apply(
+	args: {
+		skipDefaults: boolean | undefined;
+		env?: string;
+		imageUpdateRequired?: boolean;
+	},
 	config: Config
 ) {
 	startSection(
@@ -296,6 +468,7 @@ export async function applyCommand(
 			image: "docker.io/cloudflare/hello-world:1.0",
 			instances: 2,
 			name: config.name ?? "my-containers-application",
+			instance_type: "dev",
 		};
 		const endConfig: JsonMap =
 			args.env !== undefined
@@ -313,7 +486,10 @@ export async function applyCommand(
 
 	const applications = await promiseSpinner(
 		ApplicationsService.listApplications(),
-		{ json: args.json, message: "Loading applications" }
+		{ message: "Loading applications" }
+	);
+	applications.forEach((app) =>
+		cleanupObservability(app.configuration.observability)
 	);
 	const applicationByNames: Record<ApplicationName, Application> = {};
 	// TODO: this is not correct right now as there can be multiple applications
@@ -329,6 +505,8 @@ export async function applyCommand(
 				application: ModifyApplicationRequestBody;
 				id: ApplicationID;
 				name: ApplicationName;
+				rollout_step_percentage?: number;
+				rollout_kind: CreateApplicationRolloutRequest.kind;
 		  }
 	)[] = [];
 
@@ -338,12 +516,30 @@ export async function applyCommand(
 	log(dim("Container application changes\n"));
 
 	for (const appConfigNoDefaults of config.containers) {
+		const application =
+			applicationByNames[
+				appConfigNoDefaults.name ??
+					// we should never actually reach this point, but just in case
+					`${config.name}-${appConfigNoDefaults.class_name}`
+			];
+
+		// while configuration.image is deprecated to the user, we still resolve to this for now.
+		if (!appConfigNoDefaults.configuration?.image && application) {
+			appConfigNoDefaults.configuration ??= {};
+		}
+
+		if (!args.imageUpdateRequired && application) {
+			appConfigNoDefaults.configuration ??= {};
+			appConfigNoDefaults.configuration.image = application.configuration.image;
+		}
+
 		const appConfig = containerAppToCreateApplication(
 			appConfigNoDefaults,
+			config.observability,
+			application,
 			args.skipDefaults
 		);
 
-		const application = applicationByNames[appConfig.name];
 		if (application !== undefined && application !== null) {
 			// we need to sort the objects (by key) because the diff algorithm works with
 			// lines
@@ -351,18 +547,40 @@ export async function applyCommand(
 				stripUndefined(applicationToCreateApplication(application))
 			);
 
+			// fill up fields that their defaults were changed over-time,
+			// maintaining retrocompatibility with the existing app
+			if (appConfigNoDefaults.scheduling_policy === undefined) {
+				appConfig.scheduling_policy = prevApp.scheduling_policy;
+			}
+
+			if (
+				prevApp.durable_objects !== undefined &&
+				appConfigNoDefaults.durable_objects !== undefined &&
+				prevApp.durable_objects.namespace_id !==
+					appConfigNoDefaults.durable_objects.namespace_id
+			) {
+				throw new UserError(
+					`Application "${prevApp.name}" is assigned to durable object ${prevApp.durable_objects.namespace_id}, but a new DO namespace is being assigned to the application,
+					you should delete the container application and deploy again`
+				);
+			}
+
+			const prevContainer =
+				appConfig.configuration.instance_type !== undefined
+					? cleanForInstanceType(prevApp)
+					: (prevApp as ContainerApp);
+			const nowContainer = mergeDeep(
+				prevContainer as CreateApplicationRequest,
+				sortObjectRecursive<CreateApplicationRequest>(appConfig)
+			) as ContainerApp;
+
 			const prev = formatConfigSnippet(
-				{ containers: [prevApp as ContainerApp] },
+				{ containers: [prevContainer] },
 				config.configPath
 			);
+
 			const now = formatConfigSnippet(
-				{
-					containers: [
-						sortObjectRecursive<CreateApplicationRequest>(
-							appConfig
-						) as ContainerApp,
-					],
-				},
+				{ containers: [nowContainer] },
 				config.configPath
 			);
 			const results = diffLines(prev, now);
@@ -448,12 +666,24 @@ export async function applyCommand(
 				}
 			}
 
-			actions.push({
-				action: "modify",
-				application: createApplicationToModifyApplication(appConfig),
-				id: application.id,
-				name: application.name,
-			});
+			if (appConfigNoDefaults.rollout_kind !== "none") {
+				actions.push({
+					action: "modify",
+					application: createApplicationToModifyApplication(appConfig),
+					id: application.id,
+					name: application.name,
+					rollout_step_percentage:
+						application.durable_objects !== undefined
+							? appConfigNoDefaults.rollout_step_percentage ?? 25
+							: appConfigNoDefaults.rollout_step_percentage,
+					rollout_kind:
+						appConfigNoDefaults.rollout_kind == "full_manual"
+							? CreateApplicationRolloutRequest.kind.FULL_MANUAL
+							: CreateApplicationRolloutRequest.kind.FULL_AUTO,
+				});
+			} else {
+				log("Skipping application rollout");
+			}
 
 			printLine("");
 			continue;
@@ -463,7 +693,18 @@ export async function applyCommand(
 		updateStatus(bold.underline(green.underline("NEW")) + ` ${appConfig.name}`);
 
 		const s = formatConfigSnippet(
-			{ containers: [appConfig as ContainerApp] },
+			{
+				containers: [
+					{
+						...appConfig,
+						instances:
+							appConfig.max_instances !== undefined
+								? // trick until we allow setting instances to undefined in the API
+									undefined
+								: appConfig.instances,
+					} as ContainerApp,
+				],
+			},
 			config.configPath
 		);
 
@@ -474,7 +715,17 @@ export async function applyCommand(
 				printLine(el, "  ");
 			});
 
-		const configToPush = { ...appConfig };
+		const configToPush = {
+			...appConfig,
+
+			configuration: {
+				...appConfig.configuration,
+
+				// De-sugar image name. We do it here so that the user
+				// sees the simplified image name in diffs.
+				image: await resolveImageName(config, appConfig.configuration.image),
+			},
+		};
 
 		// add to the actions array to create the app later
 		actions.push({
@@ -485,20 +736,6 @@ export async function applyCommand(
 
 	if (actions.length == 0) {
 		endSection("No changes to be made");
-		return;
-	}
-
-	const yes = await processArgument<boolean>(
-		{ confirm: args.json ? true : undefined },
-		"confirm",
-		{
-			type: "confirm",
-			question: "Do you want to apply these changes?",
-			label: "",
-		}
-	);
-	if (!yes) {
-		cancel("Not applying changes");
 		return;
 	}
 
@@ -518,75 +755,155 @@ export async function applyCommand(
 			return message;
 		}
 
-		return `  ${err.body.error}`;
+		if (err.body.error !== undefined) {
+			return `  ${err.body.error}`;
+		}
+
+		return JSON.stringify(err.body);
 	}
 
 	for (const action of actions) {
 		if (action.action === "create") {
-			const [_result, err] = await wrap(
-				promiseSpinner(
+			let application: Application;
+			try {
+				application = await promiseSpinner(
 					ApplicationsService.createApplication(action.application),
-					{ json: args.json, message: `creating ${action.application.name}` }
-				)
-			);
-			if (err !== null) {
+					{ message: `Creating ${action.application.name}` }
+				);
+			} catch (err) {
+				if (!(err instanceof Error)) {
+					throw err;
+				}
+
 				if (!(err instanceof ApiError)) {
-					crash(`Unexpected error creating application: ${err.message}`);
+					throw new UserError(
+						`Unexpected error creating application: ${err.message}`
+					);
 				}
 
 				if (err.status === 400) {
-					crash(
+					throw new UserError(
 						`Error creating application due to a misconfiguration\n${formatError(err)}`
 					);
 				}
 
-				crash(
-					`Error creating application due to an internal error (request id: ${err.body.request_id}): ${formatError(err)}`
+				throw new UserError(
+					`Error creating application due to an internal error (request id: ${err.body.request_id}):\n${formatError(err)}`
 				);
 			}
 
-			success(`Created application ${brandColor(action.application.name)}`, {
-				shape: shapes.bar,
-			});
+			success(
+				`Created application ${brandColor(action.application.name)} (Application ID: ${application.id})`,
+				{
+					shape: shapes.bar,
+				}
+			);
+
 			printLine("");
 			continue;
 		}
 
 		if (action.action === "modify") {
-			const [_result, err] = await wrap(
-				promiseSpinner(
-					ApplicationsService.modifyApplication(action.id, action.application),
-					{
-						json: args.json,
-						message: `modifying application ${action.name}`,
-					}
-				)
-			);
-			if (err !== null) {
+			try {
+				await promiseSpinner(
+					ApplicationsService.modifyApplication(action.id, {
+						...action.application,
+						instances:
+							action.application.max_instances !== undefined
+								? undefined
+								: action.application.instances,
+					}),
+					{ message: `Modifying ${action.application.name}` }
+				);
+			} catch (err) {
+				if (!(err instanceof Error)) {
+					throw err;
+				}
+
 				if (!(err instanceof ApiError)) {
-					crash(
+					throw new UserError(
 						`Unexpected error modifying application ${action.name}: ${err.message}`
 					);
 				}
 
 				if (err.status === 400) {
-					crash(
-						`Error modifying application ${action.name} due to a ${brandColor.underline("misconfiguration")}\n\n\t${formatError(err)}`
+					throw new UserError(
+						`Error modifying application ${action.name} due to a misconfiguration:\n\n\t${formatError(err)}`
 					);
 				}
 
-				crash(
-					`Error modifying application ${action.name} due to an internal error (request id: ${err.body.request_id}): ${formatError(err)}`
+				throw new UserError(
+					`Error modifying application ${action.name} due to an internal error (request id: ${err.body.request_id}):\n${formatError(err)}`
 				);
+			}
+
+			if (action.rollout_step_percentage !== undefined) {
+				try {
+					await promiseSpinner(
+						RolloutsService.createApplicationRollout(action.id, {
+							description: "Progressive update",
+							strategy: CreateApplicationRolloutRequest.strategy.ROLLING,
+							target_configuration:
+								(action.application
+									.configuration as ModifyDeploymentV2RequestBody) ?? {},
+							step_percentage: action.rollout_step_percentage,
+							kind: action.rollout_kind,
+						}),
+						{
+							message: `rolling out container version ${action.name}`,
+						}
+					);
+				} catch (err) {
+					if (!(err instanceof Error)) {
+						throw err;
+					}
+
+					if (!(err instanceof ApiError)) {
+						throw new UserError(
+							`Unexpected error rolling out application ${action.name}:\n${err.message}`
+						);
+					}
+
+					if (err.status === 400) {
+						throw new UserError(
+							`Error rolling out application ${action.name} due to a misconfiguration:\n\n\t${formatError(err)}`
+						);
+					}
+
+					throw new UserError(
+						`Error rolling out application ${action.name} due to an internal error (request id: ${err.body.request_id}): ${formatError(err)}`
+					);
+				}
 			}
 
 			success(`Modified application ${brandColor(action.name)}`, {
 				shape: shapes.bar,
 			});
+
 			printLine("");
 			continue;
 		}
 	}
 
 	endSection("Applied changes");
+}
+
+/**
+ * applyCommand is able to take the wrangler.toml file and render the changes that it
+ * detects.
+ */
+export async function applyCommand(
+	args: StrictYargsOptionsToInterface<typeof applyCommandOptionalYargs>,
+	config: Config
+) {
+	return apply(
+		{
+			skipDefaults: args.skipDefaults,
+			env: args.env,
+			// For the apply command we want this to default to true
+			// so that the image can be updated if the user modified it.
+			imageUpdateRequired: true,
+		},
+		config
+	);
 }
