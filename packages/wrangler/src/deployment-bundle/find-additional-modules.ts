@@ -4,6 +4,7 @@ import chalk from "chalk";
 import globToRegExp from "glob-to-regexp";
 import { UserError } from "../errors";
 import { logger } from "../logger";
+import { getWranglerHiddenDirPath } from "../paths";
 import { getBundleType } from "./bundle-type";
 import { RuleTypeToModuleType } from "./module-collection";
 import { parseRules } from "./rules";
@@ -14,18 +15,26 @@ import type { ParsedRules } from "./rules";
 import type { CfModule } from "./worker";
 
 async function* getFiles(
-	root: string,
-	relativeTo: string
+	configPath: string | undefined,
+	moduleRoot: string,
+	relativeTo: string,
+	projectRoot: string
 ): AsyncGenerator<string> {
-	for (const file of await readdir(root, { withFileTypes: true })) {
+	const wranglerHiddenDirPath = getWranglerHiddenDirPath(projectRoot);
+	for (const file of await readdir(moduleRoot, { withFileTypes: true })) {
+		const absPath = path.join(moduleRoot, file.name);
 		if (file.isDirectory()) {
-			yield* getFiles(path.join(root, file.name), relativeTo);
+			// Skip the hidden Wrangler directory so we don't accidentally bundle non-user files.
+			if (absPath !== wranglerHiddenDirPath) {
+				yield* getFiles(configPath, absPath, relativeTo, projectRoot);
+			}
 		} else {
-			// Module names should always use `/`. This is also required to match globs correctly on Windows. Later code will
-			// `path.resolve()` with these names to read contents which will perform appropriate normalisation.
-			yield path
-				.relative(relativeTo, path.join(root, file.name))
-				.replaceAll("\\", "/");
+			// don't bundle the wrangler config file
+			if (absPath !== configPath) {
+				// Module names should always use `/`. This is also required to match globs correctly on Windows. Later code will
+				// `path.resolve()` with these names to read contents which will perform appropriate normalisation.
+				yield path.relative(relativeTo, absPath).replaceAll("\\", "/");
+			}
 		}
 	}
 }
@@ -40,6 +49,21 @@ function isValidPythonPackageName(name: string): boolean {
 	return regex.test(name);
 }
 
+function filterPythonVendorModules(
+	isPythonEntrypoint: boolean,
+	modules: CfModule[]
+): CfModule[] {
+	if (!isPythonEntrypoint) {
+		return modules;
+	}
+	return modules.filter((m) => !m.name.startsWith("vendor/"));
+}
+
+function getPythonVendorModulesSize(modules: CfModule[]): number {
+	const vendorModules = modules.filter((m) => m.name.startsWith("vendor/"));
+	return vendorModules.reduce((total, m) => total + m.content.length, 0);
+}
+
 /**
  * Search the filesystem under the `moduleRoot` of the `entry` for potential additional modules
  * that match the given `rules`.
@@ -49,7 +73,12 @@ export async function findAdditionalModules(
 	rules: Rule[] | ParsedRules,
 	attachSourcemaps = false
 ): Promise<CfModule[]> {
-	const files = getFiles(entry.moduleRoot, entry.moduleRoot);
+	const files = getFiles(
+		entry.configPath,
+		entry.moduleRoot,
+		entry.moduleRoot,
+		entry.projectRoot
+	);
 	const relativeEntryPoint = path
 		.relative(entry.moduleRoot, entry.file)
 		.replaceAll("\\", "/");
@@ -109,13 +138,19 @@ export async function findAdditionalModules(
 
 	if (modules.length > 0) {
 		logger.info(`Attaching additional modules:`);
+		const filteredModules = filterPythonVendorModules(
+			isPythonEntrypoint,
+			modules
+		);
+		const vendorModulesSize = getPythonVendorModulesSize(modules);
+
 		const totalSize = modules.reduce(
 			(previous, { content }) => previous + content.length,
 			0
 		);
 
-		logger.table([
-			...modules.map(({ name, type, content }) => {
+		const tableEntries = [
+			...filteredModules.map(({ name, type, content }) => {
 				return {
 					Name: name,
 					Type: type ?? "",
@@ -125,12 +160,23 @@ export async function findAdditionalModules(
 							: `${(content.length / 1024).toFixed(2)} KiB`,
 				};
 			}),
-			{
-				Name: `Total (${modules.length} module${modules.length > 1 ? "s" : ""})`,
+		];
+
+		if (isPythonEntrypoint && vendorModulesSize > 0) {
+			tableEntries.push({
+				Name: "Vendored Modules",
 				Type: "",
-				Size: `${(totalSize / 1024).toFixed(2)} KiB`,
-			},
-		]);
+				Size: `${(vendorModulesSize / 1024).toFixed(2)} KiB`,
+			});
+		}
+
+		tableEntries.push({
+			Name: `Total (${modules.length} module${modules.length > 1 ? "s" : ""})`,
+			Type: "",
+			Size: `${(totalSize / 1024).toFixed(2)} KiB`,
+		});
+
+		logger.table(tableEntries);
 	}
 
 	return modules;

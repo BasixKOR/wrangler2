@@ -13,6 +13,7 @@ import { requireAuth } from "../user";
 import { getValidBindingName } from "../utils/getValidBindingName";
 import { isLocal, printResourceLocation } from "../utils/is-local";
 import {
+	BATCH_MAX_ERRORS_WARNINGS,
 	createKVNamespace,
 	deleteKVBulkKeyValue,
 	deleteKVKeyValue,
@@ -93,7 +94,7 @@ export const kvNamespaceCreateCommand = createCommand({
 		printResourceLocation("remote");
 		// TODO: generate a binding name stripping non alphanumeric chars
 		logger.log(`🌀 Creating namespace with title "${title}"`);
-		const namespaceId = await createKVNamespace(accountId, title);
+		const namespaceId = await createKVNamespace(config, accountId, title);
 		metrics.sendMetricsEvent("create kv namespace", {
 			sendMetrics: config.send_metrics,
 		});
@@ -139,7 +140,9 @@ export const kvNamespaceListCommand = createCommand({
 
 		// TODO: we should show bindings if they exist for given ids
 
-		logger.log(JSON.stringify(await listKVNamespaces(accountId), null, "  "));
+		logger.log(
+			JSON.stringify(await listKVNamespaces(config, accountId), null, "  ")
+		);
 		metrics.sendMetricsEvent("list kv namespaces", {
 			sendMetrics: config.send_metrics,
 		});
@@ -188,7 +191,7 @@ export const kvNamespaceDeleteCommand = createCommand({
 		const accountId = await requireAuth(config);
 
 		logger.log(`Deleting KV namespace ${id}.`);
-		await deleteKVNamespace(accountId, id);
+		await deleteKVNamespace(config, accountId, id);
 		logger.log(`Deleted KV namespace ${id}.`);
 		metrics.sendMetricsEvent("delete kv namespace", {
 			sendMetrics: config.send_metrics,
@@ -331,7 +334,7 @@ export const kvKeyPutCommand = createCommand({
 		} else {
 			const accountId = await requireAuth(config);
 
-			await putKVKeyValue(accountId, namespaceId, {
+			await putKVKeyValue(config, accountId, namespaceId, {
 				key,
 				value,
 				expiration,
@@ -421,7 +424,12 @@ export const kvKeyListCommand = createCommand({
 		} else {
 			const accountId = await requireAuth(config);
 
-			result = await listKVNamespaceKeys(accountId, namespaceId, prefix);
+			result = await listKVNamespaceKeys(
+				config,
+				accountId,
+				namespaceId,
+				prefix
+			);
 			metricEvent = "list kv keys";
 		}
 
@@ -516,7 +524,7 @@ export const kvKeyGetCommand = createCommand({
 		} else {
 			const accountId = await requireAuth(config);
 			bufferKVValue = Buffer.from(
-				await getKVKeyValue(accountId, namespaceId, key)
+				await getKVKeyValue(config, accountId, namespaceId, key)
 			);
 
 			metricEvent = "read kv value";
@@ -599,7 +607,7 @@ export const kvKeyDeleteCommand = createCommand({
 		} else {
 			const accountId = await requireAuth(config);
 
-			await deleteKVKeyValue(accountId, namespaceId, key);
+			await deleteKVKeyValue(config, accountId, namespaceId, key);
 			metricEvent = "delete kv key-value";
 		}
 		metrics.sendMetricsEvent(metricEvent, {
@@ -720,7 +728,7 @@ export const kvBulkGetCommand = createCommand({
 
 			logger.log(
 				JSON.stringify(
-					await getKVBulkKeyValue(accountId, namespaceId, keysToGet),
+					await getKVBulkKeyValue(config, accountId, namespaceId, keysToGet),
 					null,
 					2
 				)
@@ -809,20 +817,32 @@ export const kvBulkPutCommand = createCommand({
 			);
 		}
 
+		let maxNumberOfErrorsReached = false;
 		const errors: string[] = [];
+		let maxNumberOfWarningsReached = false;
 		const warnings: string[] = [];
 		for (let i = 0; i < content.length; i++) {
 			const keyValue = content[i];
-			if (!isKVKeyValue(keyValue)) {
-				errors.push(`The item at index ${i} is ${JSON.stringify(keyValue)}`);
+			if (!isKVKeyValue(keyValue) && !maxNumberOfErrorsReached) {
+				if (errors.length === BATCH_MAX_ERRORS_WARNINGS) {
+					maxNumberOfErrorsReached = true;
+					errors.push("...");
+				} else {
+					errors.push(`The item at index ${i} is ${JSON.stringify(keyValue)}`);
+				}
 			} else {
 				const props = unexpectedKVKeyValueProps(keyValue);
-				if (props.length > 0) {
-					warnings.push(
-						`The item at index ${i} contains unexpected properties: ${JSON.stringify(
-							props
-						)}.`
-					);
+				if (props.length > 0 && !maxNumberOfWarningsReached) {
+					if (warnings.length === BATCH_MAX_ERRORS_WARNINGS) {
+						maxNumberOfWarningsReached = true;
+						warnings.push("...");
+					} else {
+						warnings.push(
+							`The item at index ${i} contains unexpected properties: ${JSON.stringify(
+								props
+							)}.`
+						);
+					}
 				}
 			}
 		}
@@ -873,7 +893,7 @@ export const kvBulkPutCommand = createCommand({
 		} else {
 			const accountId = await requireAuth(config);
 
-			await putKVBulkKeyValue(accountId, namespaceId, content);
+			await putKVBulkKeyValue(config, accountId, namespaceId, content);
 			metricEvent = "write kv key-values (bulk)";
 		}
 
@@ -1002,7 +1022,7 @@ export const kvBulkDeleteCommand = createCommand({
 		} else {
 			const accountId = await requireAuth(config);
 
-			await deleteKVBulkKeyValue(accountId, namespaceId, keysToDelete);
+			await deleteKVBulkKeyValue(config, accountId, namespaceId, keysToDelete);
 			metricEvent = "delete kv key-values (bulk)";
 		}
 

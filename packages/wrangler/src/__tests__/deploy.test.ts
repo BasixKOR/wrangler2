@@ -28,6 +28,7 @@ import {
 	mockKeyListRequest,
 	mockListKVNamespacesRequest,
 } from "./helpers/mock-kv";
+import { mockLegacyScriptData } from "./helpers/mock-legacy-script";
 import {
 	mockExchangeRefreshTokenForAccessToken,
 	mockGetMemberships,
@@ -120,7 +121,6 @@ describe("deploy", () => {
 		expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
 			Worker Startup Time: 100 ms
-			No bindings found.
 			Uploaded test-name (TIMINGS)
 			Deployed test-name triggers (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -178,7 +178,6 @@ describe("deploy", () => {
 		expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
 			Worker Startup Time: 100 ms
-			No bindings found.
 			Uploaded test-name (TIMINGS)
 			Deployed test-name triggers (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -208,7 +207,6 @@ describe("deploy", () => {
 		expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
 			Worker Startup Time: 100 ms
-			No bindings found.
 			Uploaded test-name (TIMINGS)
 			Deployed test-name triggers (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -234,7 +232,6 @@ describe("deploy", () => {
 		expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
 			Worker Startup Time: 100 ms
-			No bindings found.
 			Uploaded test-name (TIMINGS)
 			Deployed test-name triggers (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -296,9 +293,10 @@ describe("deploy", () => {
 		expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
 			Worker Startup Time: 100 ms
-			Your worker has access to the following bindings:
-			- Vars:
-			  - xyz: 123
+			Your Worker has access to the following bindings:
+			Binding            Resource
+			env.xyz (123)      Environment Variable
+
 			Uploaded test-name (TIMINGS)
 			Deployed test-name triggers (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -336,9 +334,10 @@ describe("deploy", () => {
 		expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
 			Worker Startup Time: 100 ms
-			Your worker has access to the following bindings:
-			- Vars:
-			  - xyz: 123
+			Your Worker has access to the following bindings:
+			Binding            Resource
+			env.xyz (123)      Environment Variable
+
 			Uploaded test-worker (TIMINGS)
 			Deployed test-worker triggers (TIMINGS)
 			  https://test-worker.test-sub-domain.workers.dev
@@ -410,9 +409,10 @@ describe("deploy", () => {
 		expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
 			Worker Startup Time: 100 ms
-			Your worker has access to the following bindings:
-			- Vars:
-			  - xyz: 123
+			Your Worker has access to the following bindings:
+			Binding            Resource
+			env.xyz (123)      Environment Variable
+
 			Uploaded test-worker-jsonc (TIMINGS)
 			Deployed test-worker-jsonc triggers (TIMINGS)
 			  https://test-worker-jsonc.test-sub-domain.workers.dev
@@ -444,7 +444,10 @@ describe("deploy", () => {
 						})
 					);
 				}
-			)
+			),
+			http.get("*/user/tokens/verify", () => {
+				return HttpResponse.json(createFetchResult([]));
+			})
 		);
 
 		await expect(
@@ -453,29 +456,29 @@ describe("deploy", () => {
 			`[APIError: A request to the Cloudflare API (/accounts/some-account-id/workers/services/test-name) failed.]`
 		);
 		expect(std.out).toMatchInlineSnapshot(`
-		"
-		[31mX [41;31m[[41;97mERROR[41;31m][0m [1mA request to the Cloudflare API (/accounts/some-account-id/workers/services/test-name) failed.[0m
+			"
+			[31mX [41;31m[[41;97mERROR[41;31m][0m [1mA request to the Cloudflare API (/accounts/some-account-id/workers/services/test-name) failed.[0m
 
-		  Authentication error [code: 10000]
+			  Authentication error [code: 10000]
 
 
-		📎 It looks like you are authenticating Wrangler via a custom API token set in an environment variable.
-		Please ensure it has the correct permissions for this operation.
+			📎 It looks like you are authenticating Wrangler via a custom API token set in an environment variable.
+			Please ensure it has the correct permissions for this operation.
 
-		Getting User settings...
-		ℹ️  The API Token is read from the CLOUDFLARE_API_TOKEN in your environment.
-		👋 You are logged in with an API Token, associated with the email user@example.com.
-		┌───────────────┬────────────┐
-		│ Account Name  │ Account ID │
-		├───────────────┼────────────┤
-		│ Account One   │ account-1  │
-		├───────────────┼────────────┤
-		│ Account Two   │ account-2  │
-		├───────────────┼────────────┤
-		│ Account Three │ account-3  │
-		└───────────────┴────────────┘
-		🔓 To see token permissions visit https://dash.cloudflare.com/profile/api-tokens."
-	`);
+			Getting User settings...
+			👋 You are logged in with an User API Token, associated with the email user@example.com.
+			ℹ️  The API Token is read from the CLOUDFLARE_API_TOKEN environment variable.
+			┌─┬─┐
+			│ Account Name │ Account ID │
+			├─┼─┤
+			│ Account One │ account-1 │
+			├─┼─┤
+			│ Account Two │ account-2 │
+			├─┼─┤
+			│ Account Three │ account-3 │
+			└─┴─┘
+			🔓 To see token permissions visit https://dash.cloudflare.com/profile/api-tokens."
+		`);
 	});
 
 	it("should error helpfully if pages_build_output_dir is set in wrangler.toml", async () => {
@@ -523,7 +526,6 @@ describe("deploy", () => {
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Worker ID:  abc12345
 				Worker ETag:  etag98765
 				Worker PipelineHash:  hash9999
@@ -560,11 +562,10 @@ describe("deploy", () => {
 
 			expect(std.out).toMatchInlineSnapshot(`
 				"Attempting to login via OAuth...
-				Opening a link in your default browser: https://dash.cloudflare.com/oauth2/auth?response_type=code&client_id=54d11594-84e4-41aa-b438-e81b8fa78ee7&redirect_uri=http%3A%2F%2Flocalhost%3A8976%2Foauth%2Fcallback&scope=account%3Aread%20user%3Aread%20workers%3Awrite%20workers_kv%3Awrite%20workers_routes%3Awrite%20workers_scripts%3Awrite%20workers_tail%3Aread%20d1%3Awrite%20pages%3Awrite%20zone%3Aread%20ssl_certs%3Awrite%20ai%3Awrite%20queues%3Awrite%20pipelines%3Awrite%20secrets_store%3Awrite%20offline_access&state=MOCK_STATE_PARAM&code_challenge=MOCK_CODE_CHALLENGE&code_challenge_method=S256
+				Opening a link in your default browser: https://dash.cloudflare.com/oauth2/auth?response_type=code&client_id=54d11594-84e4-41aa-b438-e81b8fa78ee7&redirect_uri=http%3A%2F%2Flocalhost%3A8976%2Foauth%2Fcallback&scope=account%3Aread%20user%3Aread%20workers%3Awrite%20workers_kv%3Awrite%20workers_routes%3Awrite%20workers_scripts%3Awrite%20workers_tail%3Aread%20d1%3Awrite%20pages%3Awrite%20zone%3Aread%20ssl_certs%3Awrite%20ai%3Awrite%20queues%3Awrite%20pipelines%3Awrite%20secrets_store%3Awrite%20containers%3Awrite%20cloudchamber%3Awrite%20offline_access&state=MOCK_STATE_PARAM&code_challenge=MOCK_CODE_CHALLENGE&code_challenge_method=S256
 				Successfully logged in.
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -602,11 +603,10 @@ describe("deploy", () => {
 
 				expect(std.out).toMatchInlineSnapshot(`
 					"Attempting to login via OAuth...
-					Opening a link in your default browser: https://dash.staging.cloudflare.com/oauth2/auth?response_type=code&client_id=54d11594-84e4-41aa-b438-e81b8fa78ee7&redirect_uri=http%3A%2F%2Flocalhost%3A8976%2Foauth%2Fcallback&scope=account%3Aread%20user%3Aread%20workers%3Awrite%20workers_kv%3Awrite%20workers_routes%3Awrite%20workers_scripts%3Awrite%20workers_tail%3Aread%20d1%3Awrite%20pages%3Awrite%20zone%3Aread%20ssl_certs%3Awrite%20ai%3Awrite%20queues%3Awrite%20pipelines%3Awrite%20secrets_store%3Awrite%20offline_access&state=MOCK_STATE_PARAM&code_challenge=MOCK_CODE_CHALLENGE&code_challenge_method=S256
+					Opening a link in your default browser: https://dash.staging.cloudflare.com/oauth2/auth?response_type=code&client_id=54d11594-84e4-41aa-b438-e81b8fa78ee7&redirect_uri=http%3A%2F%2Flocalhost%3A8976%2Foauth%2Fcallback&scope=account%3Aread%20user%3Aread%20workers%3Awrite%20workers_kv%3Awrite%20workers_routes%3Awrite%20workers_scripts%3Awrite%20workers_tail%3Aread%20d1%3Awrite%20pages%3Awrite%20zone%3Aread%20ssl_certs%3Awrite%20ai%3Awrite%20queues%3Awrite%20pipelines%3Awrite%20secrets_store%3Awrite%20containers%3Awrite%20cloudchamber%3Awrite%20offline_access&state=MOCK_STATE_PARAM&code_challenge=MOCK_CODE_CHALLENGE&code_challenge_method=S256
 					Successfully logged in.
 					Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -631,7 +631,6 @@ describe("deploy", () => {
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -666,7 +665,6 @@ describe("deploy", () => {
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -691,7 +689,6 @@ describe("deploy", () => {
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -871,7 +868,6 @@ describe("deploy", () => {
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name-some-env (TIMINGS)
 				Deployed test-name-some-env triggers (TIMINGS)
 				  https://test-name-some-env.test-sub-domain.workers.dev
@@ -894,7 +890,6 @@ describe("deploy", () => {
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -917,7 +912,6 @@ describe("deploy", () => {
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name-some-env (TIMINGS)
 					Deployed test-name-some-env triggers (TIMINGS)
 					  https://test-name-some-env.test-sub-domain.workers.dev
@@ -940,7 +934,6 @@ describe("deploy", () => {
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name-some-env (TIMINGS)
 					Deployed test-name-some-env triggers (TIMINGS)
 					  https://test-name-some-env.test-sub-domain.workers.dev
@@ -984,19 +977,17 @@ describe("deploy", () => {
 				`);
 			});
 
-			it("should throw an error w/ helpful message when using --env --name", async () => {
+			it("should allow --env and --name to be used together", async () => {
 				writeWranglerConfig({ env: { "some-env": {} } });
 				writeWorkerSource();
 				mockSubDomainRequest();
+				mockUploadWorkerRequest({
+					env: "some-env",
+					expectedScriptName: "voyager",
+					legacyEnv: true,
+				});
 				await runWrangler(
 					"deploy index.js --name voyager --env some-env --legacy-env true"
-				).catch((err) =>
-					expect(err).toMatchInlineSnapshot(`
-						[Error: In legacy environment mode you cannot use --name and --env together. If you want to specify a Worker name for a specific environment you can add the following to your wrangler.toml file:
-						[env.some-env]
-						name = "voyager"
-						]
-					`)
 				);
 			});
 		});
@@ -1014,7 +1005,6 @@ describe("deploy", () => {
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -1045,7 +1035,6 @@ describe("deploy", () => {
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (some-env) (TIMINGS)
 					Deployed test-name (some-env) triggers (TIMINGS)
 					  https://some-env.test-name.test-sub-domain.workers.dev
@@ -1091,9 +1080,10 @@ describe("deploy", () => {
 		expect(std.out).toMatchInlineSnapshot(`
 			"Total Upload: xx KiB / gzip: xx KiB
 			Worker Startup Time: 100 ms
-			Your worker has access to the following bindings:
-			- Vars:
-			  - xyz: 123
+			Your Worker has access to the following bindings:
+			Binding            Resource
+			env.xyz (123)      Environment Variable
+
 			Uploaded test-name (TIMINGS)
 			Deployed test-name triggers (TIMINGS)
 			  https://test-name.test-sub-domain.workers.dev
@@ -1131,7 +1121,6 @@ describe("deploy", () => {
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -1181,7 +1170,6 @@ describe("deploy", () => {
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  some-example.com/some-route/*
@@ -1226,7 +1214,6 @@ describe("deploy", () => {
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  partner.com/* (zone name: owned-zone.com)
@@ -1267,7 +1254,6 @@ describe("deploy", () => {
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  subdomain.partner.com/* (zone name: owned-zone.com)
@@ -1329,7 +1315,6 @@ describe("deploy", () => {
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (staging) (TIMINGS)
 				Deployed test-name (staging) triggers (TIMINGS)
 				  some-example.com/some-route/*
@@ -1442,7 +1427,6 @@ describe("deploy", () => {
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  example.com/some-route/*
@@ -1820,7 +1804,6 @@ Update them to point to this script instead?`,
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  simple.co.uk/path/*
@@ -1887,7 +1870,6 @@ Update them to point to this script instead?`,
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  example.com/blog/* (zone id: asdfadsf)
@@ -1954,7 +1936,6 @@ Update them to point to this script instead?`,
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  example.com/blog/* (zone id: asdfadsf)
@@ -2034,7 +2015,6 @@ Update them to point to this script instead?`,
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  simple.co.uk/path/*
@@ -2051,6 +2031,43 @@ Update them to point to this script instead?`,
 		it.todo("should error if it's a workers.dev route");
 	});
 
+	describe("triggers", () => {
+		it("should deploy the worker with a scheduled trigger", async () => {
+			const crons = ["*/5 * * * *", "0 18 * * 6L"];
+			writeWranglerConfig({
+				triggers: { crons },
+			});
+			writeWorkerSource();
+			mockSubDomainRequest();
+			mockUploadWorkerRequest({ expectedType: "esm" });
+			mockPublishSchedulesRequest({ crons });
+			await runWrangler("deploy ./index");
+		});
+
+		it("should deploy the worker with an empty array of scheduled triggers", async () => {
+			const crons: string[] = [];
+			writeWranglerConfig({
+				triggers: { crons },
+			});
+			writeWorkerSource();
+			mockSubDomainRequest();
+			mockUploadWorkerRequest({ expectedType: "esm" });
+			mockPublishSchedulesRequest({ crons });
+			await runWrangler("deploy ./index");
+		});
+
+		it.each([{ triggers: { crons: undefined } }, { triggers: undefined }, {}])(
+			"should deploy the worker without updating the scheduled triggers",
+			async (config) => {
+				writeWranglerConfig(config);
+				writeWorkerSource();
+				mockSubDomainRequest();
+				mockUploadWorkerRequest({ expectedType: "esm" });
+				await runWrangler("deploy ./index");
+			}
+		);
+	});
+
 	describe("entry-points", () => {
 		it("should be able to use `index` with no extension as the entry-point (esm)", async () => {
 			writeWranglerConfig();
@@ -2063,7 +2080,6 @@ Update them to point to this script instead?`,
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2086,7 +2102,6 @@ Update them to point to this script instead?`,
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2106,7 +2121,6 @@ Update them to point to this script instead?`,
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2128,7 +2142,6 @@ Update them to point to this script instead?`,
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2147,7 +2160,6 @@ Update them to point to this script instead?`,
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2170,7 +2182,6 @@ Update them to point to this script instead?`,
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2204,7 +2215,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2232,7 +2242,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2252,7 +2261,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2354,7 +2362,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2438,7 +2445,6 @@ addEventListener('fetch', event => {});`
 				  "out": "↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2497,7 +2503,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2754,7 +2759,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2812,7 +2816,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2877,7 +2880,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -2976,23 +2978,22 @@ addEventListener('fetch', event => {});`
 			Uploaded 100% [2 out of 2]"
 		`);
 			expect(std.out).toMatchInlineSnapshot(`
-				"┌───────────────────┬──────┬──────────┐
-				│ Name              │ Type │ Size     │
-				├───────────────────┼──────┼──────────┤
-				│ a/1.mjs           │ esm  │ xx KiB │
-				├───────────────────┼──────┼──────────┤
-				│ a/b/2.mjs         │ esm  │ xx KiB │
-				├───────────────────┼──────┼──────────┤
-				│ a/b/3.mjs         │ esm  │ xx KiB │
-				├───────────────────┼──────┼──────────┤
-				│ a/b/c/4.mjs       │ esm  │ xx KiB │
-				├───────────────────┼──────┼──────────┤
-				│ Total (4 modules) │      │ xx KiB │
-				└───────────────────┴──────┴──────────┘
+				"┌─┬─┬─┐
+				│ Name │ Type │ Size │
+				├─┼─┼─┤
+				│ a/1.mjs │ esm │ xx KiB │
+				├─┼─┼─┤
+				│ a/b/2.mjs │ esm │ xx KiB │
+				├─┼─┼─┤
+				│ a/b/3.mjs │ esm │ xx KiB │
+				├─┼─┼─┤
+				│ a/b/c/4.mjs │ esm │ xx KiB │
+				├─┼─┼─┤
+				│ Total (4 modules) │ │ xx KiB │
+				└─┴─┴─┘
 				↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -3049,7 +3050,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (some-env) (TIMINGS)
 				Deployed test-name (some-env) triggers (TIMINGS)
 				  https://some-env.test-name.test-sub-domain.workers.dev
@@ -3106,7 +3106,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name-some-env (TIMINGS)
 				Deployed test-name-some-env triggers (TIMINGS)
 				  https://test-name-some-env.test-sub-domain.workers.dev
@@ -3148,7 +3147,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -3196,7 +3194,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -3244,7 +3241,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -3293,7 +3289,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -3342,7 +3337,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -3391,7 +3385,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -3440,7 +3433,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -3491,7 +3483,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -3546,7 +3537,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -3657,7 +3647,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -3797,7 +3786,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -3858,7 +3846,6 @@ addEventListener('fetch', event => {});`
 				"↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -3904,7 +3891,6 @@ addEventListener('fetch', event => {});`
 				  "out": "↗️  Done syncing assets
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -4120,7 +4106,6 @@ addEventListener('fetch', event => {});`
 					  "out": "↗️  Done syncing assets
 					Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -4530,7 +4515,7 @@ addEventListener('fetch', event => {});`
 
 			await expect(runWrangler("deploy")).rejects
 				.toThrowErrorMatchingInlineSnapshot(`
-				[Error: Cannot set run_worker_first=true without a Worker script.
+				[Error: Cannot set run_worker_first without a Worker script.
 				Please remove run_worker_first from your configuration file, or provide a Worker script in your configuration file (\`main\`).]
 			`);
 		});
@@ -4577,15 +4562,11 @@ addEventListener('fetch', event => {});`
 			);
 			await expect(
 				flatBodies["80e40c1f2422528cb2fba3f9389ce315"]
-			).toBeAFileWhichMatches(
-				new File(
-					["c29tZXRoaW5nLWJpbmFyeQ=="],
-					"80e40c1f2422528cb2fba3f9389ce315",
-					{
-						type: "application/null",
-					}
-				)
-			);
+			).toBeAFileWhichMatches({
+				fileBits: ["c29tZXRoaW5nLWJpbmFyeQ=="],
+				name: "80e40c1f2422528cb2fba3f9389ce315",
+				type: "application/null",
+			});
 		});
 
 		it("should be able to upload files with special characters in filepaths", async () => {
@@ -4647,42 +4628,27 @@ addEventListener('fetch', event => {});`
 			const flatBodies = Object.fromEntries(
 				uploadBodies.flatMap((b) => [...b.entries()])
 			);
-			const [nodeMajorString] = process.versions.node.split(".");
-			const nodeMajor = Number(nodeMajorString);
 			await expect(
 				flatBodies["ff5016e92f039aa743a4ff7abb3180fa"]
-			).toBeAFileWhichMatches(
-				new File(
-					["Q29udGVudCBvZiBmaWxlLTM="],
-					"ff5016e92f039aa743a4ff7abb3180fa",
-					{
-						// TODO: this should be "text/plain; charset=utf-8", but msw? is stripping the charset part
-						type: nodeMajor > 18 ? "text/plain;charset=utf-8" : "text/plain",
-					}
-				)
-			);
+			).toBeAFileWhichMatches({
+				fileBits: ["Q29udGVudCBvZiBmaWxlLTM="],
+				name: "ff5016e92f039aa743a4ff7abb3180fa",
+				type: "text/plain",
+			});
 			await expect(
 				flatBodies["7574a8cd3094a050388ac9663af1c1d6"]
-			).toBeAFileWhichMatches(
-				new File(
-					["Q29udGVudCBvZiBmaWxlLTI="],
-					"7574a8cd3094a050388ac9663af1c1d6",
-					{
-						type: nodeMajor > 18 ? "text/plain;charset=utf-8" : "text/plain",
-					}
-				)
-			);
+			).toBeAFileWhichMatches({
+				fileBits: ["Q29udGVudCBvZiBmaWxlLTI="],
+				name: "7574a8cd3094a050388ac9663af1c1d6",
+				type: "text/plain",
+			});
 			await expect(
 				flatBodies["0de3dd5df907418e9730fd2bd747bd5e"]
-			).toBeAFileWhichMatches(
-				new File(
-					["Q29udGVudCBvZiBmaWxlLTE="],
-					"0de3dd5df907418e9730fd2bd747bd5e",
-					{
-						type: nodeMajor > 18 ? "text/plain;charset=utf-8" : "text/plain",
-					}
-				)
-			);
+			).toBeAFileWhichMatches({
+				fileBits: ["Q29udGVudCBvZiBmaWxlLTE="],
+				name: "0de3dd5df907418e9730fd2bd747bd5e",
+				type: "text/plain",
+			});
 		});
 
 		it("should resolve assets directory relative to wrangler.toml if using config", async () => {
@@ -5113,54 +5079,34 @@ addEventListener('fetch', event => {});`
 				bodies.flatMap((b) => [...b.entries()])
 			);
 
-			const [nodeMajorString] = process.versions.node.split(".");
-			const nodeMajor = Number(nodeMajorString);
-
 			await expect(
 				flatBodies["0de3dd5df907418e9730fd2bd747bd5e"]
-			).toBeAFileWhichMatches(
-				new File(
-					["Q29udGVudCBvZiBmaWxlLTE="],
-					"0de3dd5df907418e9730fd2bd747bd5e",
-					{
-						type: nodeMajor > 18 ? "text/plain;charset=utf-8" : "text/plain",
-					}
-				)
-			);
+			).toBeAFileWhichMatches({
+				fileBits: ["Q29udGVudCBvZiBmaWxlLTE="],
+				name: "0de3dd5df907418e9730fd2bd747bd5e",
+				type: "text/plain",
+			});
 			await expect(
 				flatBodies["7574a8cd3094a050388ac9663af1c1d6"]
-			).toBeAFileWhichMatches(
-				new File(
-					["Q29udGVudCBvZiBmaWxlLTI="],
-					"7574a8cd3094a050388ac9663af1c1d6",
-					{
-						// TODO: this should be "text/plain; charset=utf-8", but msw? is stripping the charset part
-						type: nodeMajor > 18 ? "text/plain;charset=utf-8" : "text/plain",
-					}
-				)
-			);
+			).toBeAFileWhichMatches({
+				fileBits: ["Q29udGVudCBvZiBmaWxlLTI="],
+				name: "7574a8cd3094a050388ac9663af1c1d6",
+				type: "text/plain",
+			});
 			await expect(
 				flatBodies["ff5016e92f039aa743a4ff7abb3180fa"]
-			).toBeAFileWhichMatches(
-				new File(
-					["Q29udGVudCBvZiBmaWxlLTM="],
-					"ff5016e92f039aa743a4ff7abb3180fa",
-					{
-						type: nodeMajor > 18 ? "text/plain;charset=utf-8" : "text/plain",
-					}
-				)
-			);
+			).toBeAFileWhichMatches({
+				fileBits: ["Q29udGVudCBvZiBmaWxlLTM="],
+				name: "ff5016e92f039aa743a4ff7abb3180fa",
+				type: "text/plain",
+			});
 			await expect(
 				flatBodies["f05e28a3d0bdb90d3cf4bdafe592488f"]
-			).toBeAFileWhichMatches(
-				new File(
-					["Q29udGVudCBvZiBmaWxlLTU="],
-					"f05e28a3d0bdb90d3cf4bdafe592488f",
-					{
-						type: nodeMajor > 18 ? "text/plain;charset=utf-8" : "text/plain",
-					}
-				)
-			);
+			).toBeAFileWhichMatches({
+				fileBits: ["Q29udGVudCBvZiBmaWxlLTU="],
+				name: "f05e28a3d0bdb90d3cf4bdafe592488f",
+				type: "text/plain",
+			});
 		});
 
 		it("should be able to upload a user worker with ASSETS binding and config", async () => {
@@ -5234,7 +5180,7 @@ addEventListener('fetch', event => {});`
 			await runWrangler("deploy");
 		});
 
-		it("run_worker_first provided when in config", async () => {
+		it("uploads run_worker_first=true when provided in config", async () => {
 			const assets = [
 				{ filePath: "file-1.txt", content: "Content of file-1" },
 				{ filePath: "boop/file-2.txt", content: "Content of file-2" },
@@ -5262,6 +5208,44 @@ addEventListener('fetch', event => {});`
 						html_handling: "none",
 						not_found_handling: "404-page",
 						run_worker_first: true,
+					},
+				},
+				expectedBindings: [{ name: "ASSETS", type: "assets" }],
+				expectedMainModule: "index.js",
+				expectedCompatibilityDate: "2024-09-27",
+				expectedCompatibilityFlags: ["nodejs_compat"],
+			});
+			await runWrangler("deploy");
+		});
+
+		it("uploads run_worker_first=[rules] when provided in config", async () => {
+			const assets = [
+				{ filePath: "file-1.txt", content: "Content of file-1" },
+				{ filePath: "boop/file-2.txt", content: "Content of file-2" },
+			];
+			writeAssets(assets);
+			writeWorkerSource({ format: "js" });
+			writeWranglerConfig({
+				main: "index.js",
+				compatibility_date: "2024-09-27",
+				compatibility_flags: ["nodejs_compat"],
+				assets: {
+					directory: "assets",
+					binding: "ASSETS",
+					html_handling: "none",
+					not_found_handling: "404-page",
+					run_worker_first: ["/api", "!/api/asset"],
+				},
+			});
+			await mockAUSRequest();
+			mockSubDomainRequest();
+			mockUploadWorkerRequest({
+				expectedAssets: {
+					jwt: "<<aus-completion-token>>",
+					config: {
+						html_handling: "none",
+						not_found_handling: "404-page",
+						run_worker_first: ["/api", "!/api/asset"],
 					},
 				},
 				expectedBindings: [{ name: "ASSETS", type: "assets" }],
@@ -5382,7 +5366,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -5406,7 +5389,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -5429,7 +5411,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -5453,7 +5434,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -5478,7 +5458,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -5501,7 +5480,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				No deploy targets for test-name (TIMINGS)
 				Current Version ID: Galaxy-Class"
@@ -5524,7 +5502,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				No deploy targets for test-name (TIMINGS)
 				Current Version ID: Galaxy-Class"
@@ -5546,7 +5523,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				No deploy targets for test-name (TIMINGS)
 				Current Version ID: Galaxy-Class"
@@ -5569,7 +5545,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				No deploy targets for test-name (TIMINGS)
 				Current Version ID: Galaxy-Class"
@@ -5598,7 +5573,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (dev) (TIMINGS)
 				No deploy targets for test-name (dev) (TIMINGS)
 				Current Version ID: Galaxy-Class"
@@ -5627,7 +5601,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (dev) (TIMINGS)
 				No deploy targets for test-name (dev) (TIMINGS)
 				Current Version ID: undefined"
@@ -5657,7 +5630,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (dev) (TIMINGS)
 				Deployed test-name (dev) triggers (TIMINGS)
 				  https://dev.test-name.test-sub-domain.workers.dev
@@ -5689,7 +5661,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (dev) (TIMINGS)
 				Deployed test-name (dev) triggers (TIMINGS)
 				  https://dev.test-name.test-sub-domain.workers.dev
@@ -5721,7 +5692,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (dev) (TIMINGS)
 				Deployed test-name (dev) triggers (TIMINGS)
 				  https://dev.test-name.test-sub-domain.workers.dev
@@ -5756,7 +5726,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (dev) (TIMINGS)
 				Deployed test-name (dev) triggers (TIMINGS)
 				  https://dev.test-name.test-sub-domain.workers.dev
@@ -5792,7 +5761,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (dev) (TIMINGS)
 				Deployed test-name (dev) triggers (TIMINGS)
 				  https://dev.test-name.test-sub-domain.workers.dev
@@ -5856,7 +5824,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -5878,7 +5845,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -5958,7 +5924,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  http://example.com/*
@@ -5996,7 +5961,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name-production (TIMINGS)
 				Deployed test-name-production triggers (TIMINGS)
 				  http://production.example.com/*
@@ -6034,7 +5998,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name-production (TIMINGS)
 				Deployed test-name-production triggers (TIMINGS)
 				  http://production.example.com/*
@@ -6066,7 +6029,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -6109,7 +6071,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name-production (TIMINGS)
 				Deployed test-name-production triggers (TIMINGS)
 				  https://test-name-production.test-sub-domain.workers.dev
@@ -6152,7 +6113,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name-production (TIMINGS)
 				Deployed test-name-production triggers (TIMINGS)
 				  https://test-name-production.test-sub-domain.workers.dev
@@ -6192,7 +6152,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name-production (TIMINGS)
 				Deployed test-name-production triggers (TIMINGS)
 				  http://production.example.com/*
@@ -6231,7 +6190,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name-production (TIMINGS)
 				Deployed test-name-production triggers (TIMINGS)
 				  http://production.example.com/*
@@ -6381,10 +6339,9 @@ addEventListener('fetch', event => {});`
 
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
-				"Running custom build: node -e \\"4+4; require('fs').writeFileSync('index.js', 'export default { fetch(){ return new Response(123) } }')\\"
+				"[custom build] Running: node -e \\"4+4; require('fs').writeFileSync('index.js', 'export default { fetch(){ return new Response(123) } }')\\"
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -6409,10 +6366,9 @@ addEventListener('fetch', event => {});`
 
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
-					"Running custom build: echo \\"export default { fetch(){ return new Response(123) } }\\" > index.js
+					"[custom build] Running: echo \\"export default { fetch(){ return new Response(123) } }\\" > index.js
 					Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -6437,9 +6393,9 @@ addEventListener('fetch', event => {});`
 				The \`main\` property in your wrangler.toml file should point to the file generated by the custom build.]
 			`);
 			expect(std.out).toMatchInlineSnapshot(`
-			"Running custom build: node -e \\"4+4;\\"
-			"
-		`);
+				"[custom build] Running: node -e \\"4+4;\\"
+				"
+			`);
 			expect(std.err).toMatchInlineSnapshot(`
 				"[31mX [41;31m[[41;97mERROR[41;31m][0m [1mThe expected output file at \\"index.js\\" was not found after running custom build: node -e \\"4+4;\\".[0m
 
@@ -6476,9 +6432,9 @@ addEventListener('fetch', event => {});`
 				\`\`\`]
 			`);
 			expect(std.out).toMatchInlineSnapshot(`
-			"Running custom build: node -e \\"4+4;\\"
-			"
-		`);
+				"[custom build] Running: node -e \\"4+4;\\"
+				"
+			`);
 			expect(std.err).toMatchInlineSnapshot(`
 				"[31mX [41;31m[[41;97mERROR[41;31m][0m [1mThe expected output file at \\".\\" was not found after running custom build: node -e \\"4+4;\\".[0m
 
@@ -6521,7 +6477,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -6563,13 +6518,90 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (testEnv) (TIMINGS)
 				Deployed test-name (testEnv) triggers (TIMINGS)
 				  https://testEnv.test-name.test-sub-domain.workers.dev
 				Current Version ID: undefined"
 			`);
 			expect(std.err).toMatchInlineSnapshot(`""`);
+		});
+
+		it("should apply esbuild's keep-names functionality by default", async () => {
+			writeWranglerConfig({
+				main: "./index.js",
+				legacy_env: false,
+				env: {
+					testEnv: {},
+				},
+			});
+			fs.writeFileSync(
+				"./index.js",
+				`
+				export
+					default {
+						fetch() {
+							function sayHello() {
+								return "Hello World with keep_names";
+							}
+							return new Response(sayHello());
+					}
+				}
+				`
+			);
+
+			const underscoreUnderscoreNameRegex = /__name\(.*?\)/;
+
+			mockUploadWorkerRequest({
+				env: "testEnv",
+				expectedType: "esm",
+				legacyEnv: false,
+				expectedEntry: (str) => {
+					expect(str).toMatch(underscoreUnderscoreNameRegex);
+				},
+			});
+
+			mockSubDomainRequest();
+			await runWrangler("deploy -e testEnv index.js");
+		});
+
+		it("should apply esbuild's keep-names functionality unless keep_names is set to false", async () => {
+			writeWranglerConfig({
+				main: "./index.js",
+				legacy_env: false,
+				env: {
+					testEnv: {
+						keep_names: false,
+					},
+				},
+			});
+			fs.writeFileSync(
+				"./index.js",
+				`
+				export
+					default {
+						fetch() {
+							function sayHello() {
+								return "Hello World without keep_names";
+							}
+							return new Response(sayHello());
+					}
+				}
+				`
+			);
+
+			const underscoreUnderscoreNameRegex = /__name\(.*?\)/;
+
+			mockUploadWorkerRequest({
+				env: "testEnv",
+				expectedType: "esm",
+				legacyEnv: false,
+				expectedEntry: (str) => {
+					expect(str).not.toMatch(underscoreUnderscoreNameRegex);
+				},
+			});
+
+			mockSubDomainRequest();
+			await runWrangler("deploy -e testEnv index.js");
 		});
 	});
 
@@ -6590,9 +6622,10 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- Durable Objects:
-				  - SOMENAME: SomeClass
+				Your Worker has access to the following bindings:
+				Binding                       Resource
+				env.SOMENAME (SomeClass)      Durable Object
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -6643,9 +6676,10 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- Durable Objects:
-				  - SOMENAME: SomeClass (defined in some-script)
+				Your Worker has access to the following bindings:
+				Binding                                               Resource
+				env.SOMENAME (SomeClass, defined in some-script)      Durable Object
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -6689,10 +6723,11 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- Durable Objects:
-				  - SOMENAME: SomeClass
-				  - SOMEOTHERNAME: SomeOtherClass
+				Your Worker has access to the following bindings:
+				Binding                                 Resource
+				env.SOMENAME (SomeClass)                Durable Object
+				env.SOMEOTHERNAME (SomeOtherClass)      Durable Object
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -6744,10 +6779,11 @@ addEventListener('fetch', event => {});`
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- Durable Objects:
-				  - SOMENAME: SomeClass
-				  - SOMEOTHERNAME: SomeOtherClass
+				Your Worker has access to the following bindings:
+				Binding                                 Resource
+				env.SOMENAME (SomeClass)                Durable Object
+				env.SOMEOTHERNAME (SomeOtherClass)      Durable Object
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -6791,10 +6827,11 @@ addEventListener('fetch', event => {});`
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- Durable Objects:
-				  - SOMENAME: SomeClass
-				  - SOMEOTHERNAME: SomeOtherClass
+				Your Worker has access to the following bindings:
+				Binding                                 Resource
+				env.SOMENAME (SomeClass)                Durable Object
+				env.SOMEOTHERNAME (SomeOtherClass)      Durable Object
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -6840,10 +6877,11 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Durable Objects:
-					  - SOMENAME: SomeClass
-					  - SOMEOTHERNAME: SomeOtherClass
+					Your Worker has access to the following bindings:
+					Binding                                 Resource
+					env.SOMENAME (SomeClass)                Durable Object
+					env.SOMEOTHERNAME (SomeOtherClass)      Durable Object
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -6906,10 +6944,11 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Durable Objects:
-					  - SOMENAME: SomeClass
-					  - SOMEOTHERNAME: SomeOtherClass
+					Your Worker has access to the following bindings:
+					Binding                                 Resource
+					env.SOMENAME (SomeClass)                Durable Object
+					env.SOMEOTHERNAME (SomeOtherClass)      Durable Object
+
 					Uploaded test-name (xyz) (TIMINGS)
 					Deployed test-name (xyz) triggers (TIMINGS)
 					  https://xyz.test-name.test-sub-domain.workers.dev
@@ -6971,10 +7010,11 @@ addEventListener('fetch', event => {});`
 					  "info": "",
 					  "out": "Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Durable Objects:
-					  - SOMENAME: SomeClass
-					  - SOMEOTHERNAME: SomeOtherClass
+					Your Worker has access to the following bindings:
+					Binding                                 Resource
+					env.SOMENAME (SomeClass)                Durable Object
+					env.SOMEOTHERNAME (SomeOtherClass)      Durable Object
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -7044,10 +7084,11 @@ addEventListener('fetch', event => {});`
 					  "info": "",
 					  "out": "Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Durable Objects:
-					  - SOMENAME: SomeClass
-					  - SOMEOTHERNAME: SomeOtherClass
+					Your Worker has access to the following bindings:
+					Binding                                 Resource
+					env.SOMENAME (SomeClass)                Durable Object
+					env.SOMEOTHERNAME (SomeOtherClass)      Durable Object
+
 					Uploaded test-name (xyz) (TIMINGS)
 					Deployed test-name (xyz) triggers (TIMINGS)
 					  https://xyz.test-name.test-sub-domain.workers.dev
@@ -7103,10 +7144,11 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Durable Objects:
-					  - SOMENAME: SomeClass
-					  - SOMEOTHERNAME: SomeOtherClass
+					Your Worker has access to the following bindings:
+					Binding                                 Resource
+					env.SOMENAME (SomeClass)                Durable Object
+					env.SOMEOTHERNAME (SomeOtherClass)      Durable Object
+
 					Uploaded test-name (TIMINGS)
 					  Dispatch Namespace: test-namespace
 					Current Version ID: Galaxy-Class"
@@ -7155,10 +7197,11 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Durable Objects:
-					  - SOMENAME: SomeClass
-					  - SOMEOTHERNAME: SomeOtherClass
+					Your Worker has access to the following bindings:
+					Binding                                 Resource
+					env.SOMENAME (SomeClass)                Durable Object
+					env.SOMEOTHERNAME (SomeOtherClass)      Durable Object
+
 					Uploaded test-name (TIMINGS)
 					  Dispatch Namespace: test-namespace
 					Current Version ID: Galaxy-Class"
@@ -7188,7 +7231,9 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
+				Your Worker is sending Tail events to the following Workers:
+				- listener
+				- test-listener
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -7213,7 +7258,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -7440,42 +7484,33 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- Data Blobs:
-				  - DATA_BLOB_ONE: some-data-blob.bin
-				  - DATA_BLOB_TWO: more-data-blob.bin
-				- Durable Objects:
-				  - DURABLE_OBJECT_ONE: SomeDurableObject (defined in some-durable-object-worker)
-				  - DURABLE_OBJECT_TWO: AnotherDurableObject (defined in another-durable-object-worker)
-				- KV Namespaces:
-				  - KV_NAMESPACE_ONE: kv-ns-one-id
-				  - KV_NAMESPACE_TWO: kv-ns-two-id
-				- R2 Buckets:
-				  - R2_BUCKET_ONE: r2-bucket-one-name
-				  - R2_BUCKET_TWO: r2-bucket-two-name
-				  - R2_BUCKET_ONE_EU: r2-bucket-one-name (eu)
-				  - R2_BUCKET_TWO_EU: r2-bucket-two-name (eu)
-				- logfwdr:
-				  - httplogs: httplogs
-				  - trace: trace
-				- Analytics Engine Datasets:
-				  - AE_DATASET_ONE: ae-dataset-one-name
-				  - AE_DATASET_TWO: ae-dataset-two-name
-				- Text Blobs:
-				  - TEXT_BLOB_ONE: my-entire-app-depends-on-this.cfg
-				  - TEXT_BLOB_TWO: the-entirety-of-human-knowledge.txt
-				- Unsafe Metadata:
-				  - some unsafe thing: UNSAFE_BINDING_ONE
-				  - another unsafe thing: UNSAFE_BINDING_TWO
-				- Vars:
-				  - ENV_VAR_ONE: 123
-				  - ENV_VAR_TWO: \\"Hello, I'm an environment variable\\"
-				- Wasm Modules:
-				  - WASM_MODULE_ONE: some_wasm.wasm
-				  - WASM_MODULE_TWO: more_wasm.wasm
-				- Unsafe Metadata:
-				  - extra_data: \\"interesting value\\"
-				  - more_data: \\"dubious value\\"
+				Your Worker has access to the following bindings:
+				Binding                                                                                        Resource
+				env.DATA_BLOB_ONE (some-data-blob.bin)                                                         Data Blob
+				env.DATA_BLOB_TWO (more-data-blob.bin)                                                         Data Blob
+				env.DURABLE_OBJECT_ONE (SomeDurableObject, defined in some-durable-object-worker)              Durable Object
+				env.DURABLE_OBJECT_TWO (AnotherDurableObject, defined in another-durable-object-worker)        Durable Object
+				env.KV_NAMESPACE_ONE (kv-ns-one-id)                                                            KV Namespace
+				env.KV_NAMESPACE_TWO (kv-ns-two-id)                                                            KV Namespace
+				env.R2_BUCKET_ONE (r2-bucket-one-name)                                                         R2 Bucket
+				env.R2_BUCKET_TWO (r2-bucket-two-name)                                                         R2 Bucket
+				env.R2_BUCKET_ONE_EU (r2-bucket-one-name (eu))                                                 R2 Bucket
+				env.R2_BUCKET_TWO_EU (r2-bucket-two-name (eu))                                                 R2 Bucket
+				env.httplogs (httplogs)                                                                        logfwdr
+				env.trace (trace)                                                                              logfwdr
+				env.AE_DATASET_ONE (ae-dataset-one-name)                                                       Analytics Engine Dataset
+				env.AE_DATASET_TWO (ae-dataset-two-name)                                                       Analytics Engine Dataset
+				env.TEXT_BLOB_ONE (my-entire-app-depends-on-this.cfg)                                          Text Blob
+				env.TEXT_BLOB_TWO (the-entirety-of-human-knowledge.txt)                                        Text Blob
+				env.some unsafe thing (UNSAFE_BINDING_ONE)                                                     Unsafe Metadata
+				env.another unsafe thing (UNSAFE_BINDING_TWO)                                                  Unsafe Metadata
+				env.ENV_VAR_ONE (123)                                                                          Environment Variable
+				env.ENV_VAR_TWO (\\"Hello, I'm an environment variable\\")                                         Environment Variable
+				env.WASM_MODULE_ONE (some_wasm.wasm)                                                           Wasm Module
+				env.WASM_MODULE_TWO (more_wasm.wasm)                                                           Wasm Module
+				env.extra_data (\\"interesting value\\")                                                           Unsafe Metadata
+				env.more_data (\\"dubious value\\")                                                                Unsafe Metadata
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -7572,10 +7607,10 @@ addEventListener('fetch', event => {});`
 			await expect(runWrangler("deploy index.js")).rejects
 				.toMatchInlineSnapshot(`
 				[Error: Processing wrangler.toml configuration:
-				  - CONFLICTING_NAME_THREE assigned to Data Blobs, R2 Buckets, Text Blobs, Unsafe Metadata, Vars, and Wasm Modules bindings.
-				  - CONFLICTING_NAME_ONE assigned to Durable Objects, KV Namespaces, and R2 Buckets bindings.
-				  - CONFLICTING_NAME_TWO assigned to Durable Objects and KV Namespaces bindings.
-				  - CONFLICTING_NAME_FOUR assigned to Analytics Engine Datasets, Text Blobs, and Unsafe Metadata bindings.
+				  - CONFLICTING_NAME_THREE assigned to Data Blob, R2 Bucket, Text Blob, Unsafe Metadata, Environment Variable, and Wasm Module bindings.
+				  - CONFLICTING_NAME_ONE assigned to Durable Object, KV Namespace, and R2 Bucket bindings.
+				  - CONFLICTING_NAME_TWO assigned to Durable Object and KV Namespace bindings.
+				  - CONFLICTING_NAME_FOUR assigned to Analytics Engine Dataset, Text Blob, and Unsafe Metadata bindings.
 				  - Bindings must have unique names, so that they can all be referenced in the worker.
 				    Please change your bindings to have unique names.]
 			`);
@@ -7583,11 +7618,11 @@ addEventListener('fetch', event => {});`
 			expect(std.err).toMatchInlineSnapshot(`
 				"[31mX [41;31m[[41;97mERROR[41;31m][0m [1mProcessing wrangler.toml configuration:[0m
 
-				    - CONFLICTING_NAME_THREE assigned to Data Blobs, R2 Buckets, Text Blobs, Unsafe Metadata, Vars,
-				  and Wasm Modules bindings.
-				    - CONFLICTING_NAME_ONE assigned to Durable Objects, KV Namespaces, and R2 Buckets bindings.
-				    - CONFLICTING_NAME_TWO assigned to Durable Objects and KV Namespaces bindings.
-				    - CONFLICTING_NAME_FOUR assigned to Analytics Engine Datasets, Text Blobs, and Unsafe Metadata
+				    - CONFLICTING_NAME_THREE assigned to Data Blob, R2 Bucket, Text Blob, Unsafe Metadata,
+				  Environment Variable, and Wasm Module bindings.
+				    - CONFLICTING_NAME_ONE assigned to Durable Object, KV Namespace, and R2 Bucket bindings.
+				    - CONFLICTING_NAME_TWO assigned to Durable Object and KV Namespace bindings.
+				    - CONFLICTING_NAME_FOUR assigned to Analytics Engine Dataset, Text Blob, and Unsafe Metadata
 				  bindings.
 				    - Bindings must have unique names, so that they can all be referenced in the worker.
 				      Please change your bindings to have unique names.
@@ -7680,10 +7715,10 @@ addEventListener('fetch', event => {});`
 			await expect(runWrangler("deploy index.js")).rejects
 				.toMatchInlineSnapshot(`
 				[Error: Processing wrangler.toml configuration:
-				  - CONFLICTING_DURABLE_OBJECT_NAME assigned to multiple Durable Objects bindings.
-				  - CONFLICTING_KV_NAMESPACE_NAME assigned to multiple KV Namespaces bindings.
-				  - CONFLICTING_R2_BUCKET_NAME assigned to multiple R2 Buckets bindings.
-				  - CONFLICTING_AE_DATASET_NAME assigned to multiple Analytics Engine Datasets bindings.
+				  - CONFLICTING_DURABLE_OBJECT_NAME assigned to multiple Durable Object bindings.
+				  - CONFLICTING_KV_NAMESPACE_NAME assigned to multiple KV Namespace bindings.
+				  - CONFLICTING_R2_BUCKET_NAME assigned to multiple R2 Bucket bindings.
+				  - CONFLICTING_AE_DATASET_NAME assigned to multiple Analytics Engine Dataset bindings.
 				  - CONFLICTING_UNSAFE_NAME assigned to multiple Unsafe Metadata bindings.
 				  - Bindings must have unique names, so that they can all be referenced in the worker.
 				    Please change your bindings to have unique names.]
@@ -7692,10 +7727,10 @@ addEventListener('fetch', event => {});`
 			expect(std.err).toMatchInlineSnapshot(`
 				"[31mX [41;31m[[41;97mERROR[41;31m][0m [1mProcessing wrangler.toml configuration:[0m
 
-				    - CONFLICTING_DURABLE_OBJECT_NAME assigned to multiple Durable Objects bindings.
-				    - CONFLICTING_KV_NAMESPACE_NAME assigned to multiple KV Namespaces bindings.
-				    - CONFLICTING_R2_BUCKET_NAME assigned to multiple R2 Buckets bindings.
-				    - CONFLICTING_AE_DATASET_NAME assigned to multiple Analytics Engine Datasets bindings.
+				    - CONFLICTING_DURABLE_OBJECT_NAME assigned to multiple Durable Object bindings.
+				    - CONFLICTING_KV_NAMESPACE_NAME assigned to multiple KV Namespace bindings.
+				    - CONFLICTING_R2_BUCKET_NAME assigned to multiple R2 Bucket bindings.
+				    - CONFLICTING_AE_DATASET_NAME assigned to multiple Analytics Engine Dataset bindings.
 				    - CONFLICTING_UNSAFE_NAME assigned to multiple Unsafe Metadata bindings.
 				    - Bindings must have unique names, so that they can all be referenced in the worker.
 				      Please change your bindings to have unique names.
@@ -7830,12 +7865,12 @@ addEventListener('fetch', event => {});`
 			await expect(runWrangler("deploy index.js")).rejects
 				.toMatchInlineSnapshot(`
 				[Error: Processing wrangler.toml configuration:
-				  - CONFLICTING_NAME_THREE assigned to Data Blobs, R2 Buckets, Analytics Engine Datasets, Text Blobs, Unsafe Metadata, Vars, and Wasm Modules bindings.
-				  - CONFLICTING_DURABLE_OBJECT_NAME assigned to multiple Durable Objects bindings.
-				  - CONFLICTING_KV_NAMESPACE_NAME assigned to multiple KV Namespaces bindings.
-				  - CONFLICTING_R2_BUCKET_NAME assigned to multiple R2 Buckets bindings.
-				  - CONFLICTING_NAME_FOUR assigned to R2 Buckets, Analytics Engine Datasets, Text Blobs, and Unsafe Metadata bindings.
-				  - CONFLICTING_AE_DATASET_NAME assigned to multiple Analytics Engine Datasets bindings.
+				  - CONFLICTING_NAME_THREE assigned to Data Blob, R2 Bucket, Analytics Engine Dataset, Text Blob, Unsafe Metadata, Environment Variable, and Wasm Module bindings.
+				  - CONFLICTING_DURABLE_OBJECT_NAME assigned to multiple Durable Object bindings.
+				  - CONFLICTING_KV_NAMESPACE_NAME assigned to multiple KV Namespace bindings.
+				  - CONFLICTING_R2_BUCKET_NAME assigned to multiple R2 Bucket bindings.
+				  - CONFLICTING_NAME_FOUR assigned to R2 Bucket, Analytics Engine Dataset, Text Blob, and Unsafe Metadata bindings.
+				  - CONFLICTING_AE_DATASET_NAME assigned to multiple Analytics Engine Dataset bindings.
 				  - CONFLICTING_UNSAFE_NAME assigned to multiple Unsafe Metadata bindings.
 				  - Bindings must have unique names, so that they can all be referenced in the worker.
 				    Please change your bindings to have unique names.]
@@ -7844,14 +7879,14 @@ addEventListener('fetch', event => {});`
 			expect(std.err).toMatchInlineSnapshot(`
 				"[31mX [41;31m[[41;97mERROR[41;31m][0m [1mProcessing wrangler.toml configuration:[0m
 
-				    - CONFLICTING_NAME_THREE assigned to Data Blobs, R2 Buckets, Analytics Engine Datasets, Text
-				  Blobs, Unsafe Metadata, Vars, and Wasm Modules bindings.
-				    - CONFLICTING_DURABLE_OBJECT_NAME assigned to multiple Durable Objects bindings.
-				    - CONFLICTING_KV_NAMESPACE_NAME assigned to multiple KV Namespaces bindings.
-				    - CONFLICTING_R2_BUCKET_NAME assigned to multiple R2 Buckets bindings.
-				    - CONFLICTING_NAME_FOUR assigned to R2 Buckets, Analytics Engine Datasets, Text Blobs, and
-				  Unsafe Metadata bindings.
-				    - CONFLICTING_AE_DATASET_NAME assigned to multiple Analytics Engine Datasets bindings.
+				    - CONFLICTING_NAME_THREE assigned to Data Blob, R2 Bucket, Analytics Engine Dataset, Text Blob,
+				  Unsafe Metadata, Environment Variable, and Wasm Module bindings.
+				    - CONFLICTING_DURABLE_OBJECT_NAME assigned to multiple Durable Object bindings.
+				    - CONFLICTING_KV_NAMESPACE_NAME assigned to multiple KV Namespace bindings.
+				    - CONFLICTING_R2_BUCKET_NAME assigned to multiple R2 Bucket bindings.
+				    - CONFLICTING_NAME_FOUR assigned to R2 Bucket, Analytics Engine Dataset, Text Blob, and Unsafe
+				  Metadata bindings.
+				    - CONFLICTING_AE_DATASET_NAME assigned to multiple Analytics Engine Dataset bindings.
 				    - CONFLICTING_UNSAFE_NAME assigned to multiple Unsafe Metadata bindings.
 				    - Bindings must have unique names, so that they can all be referenced in the worker.
 				      Please change your bindings to have unique names.
@@ -7891,9 +7926,10 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Wasm Modules:
-					  - TESTWASMNAME: path/to/test.wasm
+					Your Worker has access to the following bindings:
+					Binding                                   Resource
+					env.TESTWASMNAME (path/to/test.wasm)      Wasm Module
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -7961,9 +7997,10 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Wasm Modules:
-					  - TESTWASMNAME: path/to/and/the/path/to/test.wasm
+					Your Worker has access to the following bindings:
+					Binding                                                   Resource
+					env.TESTWASMNAME (path/to/and/the/path/to/test.wasm)      Wasm Module
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8000,7 +8037,6 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8038,9 +8074,10 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Text Blobs:
-					  - TESTTEXTBLOBNAME: path/to/text.file
+					Your Worker has access to the following bindings:
+					Binding                                       Resource
+					env.TESTTEXTBLOBNAME (path/to/text.file)      Text Blob
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8112,9 +8149,10 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Text Blobs:
-					  - TESTTEXTBLOBNAME: path/to/and/the/path/to/text.file
+					Your Worker has access to the following bindings:
+					Binding                                                       Resource
+					env.TESTTEXTBLOBNAME (path/to/and/the/path/to/text.file)      Text Blob
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8152,9 +8190,10 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Data Blobs:
-					  - TESTDATABLOBNAME: path/to/data.bin
+					Your Worker has access to the following bindings:
+					Binding                                      Resource
+					env.TESTDATABLOBNAME (path/to/data.bin)      Data Blob
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8226,9 +8265,10 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Data Blobs:
-					  - TESTDATABLOBNAME: path/to/and/the/path/to/data.bin
+					Your Worker has access to the following bindings:
+					Binding                                                      Resource
+					env.TESTDATABLOBNAME (path/to/and/the/path/to/data.bin)      Data Blob
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8266,14 +8306,12 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Vars:
-					  - text: \\"plain ol' string\\"
-					  - count: 1
-					  - complex: {
-					 \\"enabled\\": true,
-					 \\"id\\": 123
-					}
+					Your Worker has access to the following bindings:
+					Binding                                      Resource
+					env.text (\\"plain ol' string\\")                Environment Variable
+					env.count (1)                                Environment Variable
+					env.complex ({\\"enabled\\":true,\\"id\\":123})      Environment Variable
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8296,10 +8334,11 @@ addEventListener('fetch', event => {});`
 					  "info": "",
 					  "out": "Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Vars:
-					  - TEXT: \\"(hidden)\\"
-					  - COUNT: \\"(hidden)\\"
+					Your Worker has access to the following bindings:
+					Binding                     Resource
+					env.TEXT (\\"(hidden)\\")       Environment Variable
+					env.COUNT (\\"(hidden)\\")      Environment Variable
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8327,9 +8366,10 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- R2 Buckets:
-					  - FOO: foo-bucket
+					Your Worker has access to the following bindings:
+					Binding                   Resource
+					env.FOO (foo-bucket)      R2 Bucket
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8377,10 +8417,11 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- logfwdr:
-					  - httplogs: httplogs
-					  - trace: trace
+					Your Worker has access to the following bindings:
+					Binding                      Resource
+					env.httplogs (httplogs)      logfwdr
+					env.trace (trace)            logfwdr
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8451,9 +8492,10 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Durable Objects:
-					  - EXAMPLE_DO_BINDING: ExampleDurableObject
+					Your Worker has access to the following bindings:
+					Binding                                            Resource
+					env.EXAMPLE_DO_BINDING (ExampleDurableObject)      Durable Object
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8497,16 +8539,17 @@ addEventListener('fetch', event => {});`
 
 				await runWrangler("deploy index.js");
 				expect(std.out).toMatchInlineSnapshot(`
-			"Total Upload: xx KiB / gzip: xx KiB
-			Worker Startup Time: 100 ms
-			Your worker has access to the following bindings:
-			- Durable Objects:
-			  - EXAMPLE_DO_BINDING: ExampleDurableObject
-			Uploaded test-name (TIMINGS)
-			Deployed test-name triggers (TIMINGS)
-			  https://test-name.test-sub-domain.workers.dev
-			Current Version ID: Galaxy-Class"
-		`);
+					"Total Upload: xx KiB / gzip: xx KiB
+					Worker Startup Time: 100 ms
+					Your Worker has access to the following bindings:
+					Binding                                            Resource
+					env.EXAMPLE_DO_BINDING (ExampleDurableObject)      Durable Object
+
+					Uploaded test-name (TIMINGS)
+					Deployed test-name triggers (TIMINGS)
+					  https://test-name.test-sub-domain.workers.dev
+					Current Version ID: Galaxy-Class"
+				`);
 				expect(std.err).toMatchInlineSnapshot(`""`);
 				expect(std.warn).toMatchInlineSnapshot(`""`);
 			});
@@ -8542,9 +8585,10 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Durable Objects:
-					  - EXAMPLE_DO_BINDING: ExampleDurableObject (defined in example-do-binding-worker)
+					Your Worker has access to the following bindings:
+					Binding                                                                                  Resource
+					env.EXAMPLE_DO_BINDING (ExampleDurableObject, defined in example-do-binding-worker)      Durable Object
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8589,74 +8633,15 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Durable Objects:
-					  - EXAMPLE_DO_BINDING: ExampleDurableObject
+					Your Worker has access to the following bindings:
+					Binding                                            Resource
+					env.EXAMPLE_DO_BINDING (ExampleDurableObject)      Durable Object
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
 					Current Version ID: Galaxy-Class"
 				`);
-				expect(std.err).toMatchInlineSnapshot(`""`);
-				expect(std.warn).toMatchInlineSnapshot(`""`);
-			});
-
-			it("should support durable object bindings to SQLite classes with containers", async () => {
-				writeWranglerConfig({
-					durable_objects: {
-						bindings: [
-							{
-								name: "EXAMPLE_DO_BINDING",
-								class_name: "ExampleDurableObject",
-							},
-						],
-					},
-					containers: [
-						{
-							name: "my-container",
-							instances: 10,
-							class_name: "ExampleDurableObject",
-							configuration: {
-								image: "docker.io/hello:world",
-							},
-						},
-					],
-					migrations: [
-						{ tag: "v1", new_sqlite_classes: ["ExampleDurableObject"] },
-					],
-				});
-				fs.writeFileSync(
-					"index.js",
-					`export class ExampleDurableObject {}; export default{};`
-				);
-				mockSubDomainRequest();
-				mockLegacyScriptData({
-					scripts: [{ id: "test-name", migration_tag: "v1" }],
-				});
-				mockUploadWorkerRequest({
-					expectedBindings: [
-						{
-							class_name: "ExampleDurableObject",
-							name: "EXAMPLE_DO_BINDING",
-							type: "durable_object_namespace",
-						},
-					],
-					useOldUploadApi: true,
-					expectedContainers: [{ class_name: "ExampleDurableObject" }],
-				});
-
-				await runWrangler("deploy index.js");
-				expect(std.out).toMatchInlineSnapshot(`
-			"Total Upload: xx KiB / gzip: xx KiB
-			Worker Startup Time: 100 ms
-			Your worker has access to the following bindings:
-			- Durable Objects:
-			  - EXAMPLE_DO_BINDING: ExampleDurableObject
-			Uploaded test-name (TIMINGS)
-			Deployed test-name triggers (TIMINGS)
-			  https://test-name.test-sub-domain.workers.dev
-			Current Version ID: Galaxy-Class"
-		`);
 				expect(std.err).toMatchInlineSnapshot(`""`);
 				expect(std.warn).toMatchInlineSnapshot(`""`);
 			});
@@ -8702,14 +8687,72 @@ addEventListener('fetch', event => {});`
 
 				await runWrangler("deploy index.js --outdir tmp --dry-run");
 				expect(std.out).toMatchInlineSnapshot(`
-			"Total Upload: xx KiB / gzip: xx KiB
-			Your worker has access to the following bindings:
-			- Durable Objects:
-			  - EXAMPLE_DO_BINDING: ExampleDurableObject
-			- D1 Databases:
-			  - DB: test-d1-db (UUID-1-2-3-4), Preview: (UUID-1-2-3-4)
-			--dry-run: exiting now."
-		`);
+					"Total Upload: xx KiB / gzip: xx KiB
+					Your Worker has access to the following bindings:
+					Binding                                            Resource
+					env.EXAMPLE_DO_BINDING (ExampleDurableObject)      Durable Object
+					env.DB (UUID-1-2-3-4)                              D1 Database
+
+					--dry-run: exiting now."
+				`);
+				expect(std.err).toMatchInlineSnapshot(`""`);
+				expect(std.warn).toMatchInlineSnapshot(`""`);
+				const output = fs.readFileSync("tmp/index.js", "utf-8");
+				// D1 no longer injects middleware, so we can pass through the user's code unchanged
+				expect(output).not.toContain(`ExampleDurableObject2`);
+				// ExampleDurableObject is exported directly
+				expect(output).toContain("export {\n  ExampleDurableObject,");
+			});
+
+			it("should support durable objects and D1", async () => {
+				writeWranglerConfig({
+					main: "index.js",
+					durable_objects: {
+						bindings: [
+							{
+								name: "EXAMPLE_DO_BINDING",
+								class_name: "ExampleDurableObject",
+							},
+						],
+					},
+					migrations: [{ tag: "v1", new_classes: ["ExampleDurableObject"] }],
+					d1_databases: [
+						{
+							binding: "DB",
+							database_name: "test-d1-db",
+							database_id: "UUID-1-2-3-4",
+							preview_database_id: "UUID-1-2-3-4",
+						},
+					],
+				});
+				const scriptContent = `export class ExampleDurableObject {}; export default{};`;
+				fs.writeFileSync("index.js", scriptContent);
+				mockSubDomainRequest();
+				mockLegacyScriptData({
+					scripts: [{ id: "test-name", migration_tag: "v1" }],
+				});
+				mockUploadWorkerRequest({
+					expectedType: "esm",
+					expectedBindings: [
+						{
+							name: "EXAMPLE_DO_BINDING",
+							class_name: "ExampleDurableObject",
+							type: "durable_object_namespace",
+						},
+						{ name: "DB", type: "d1_database" },
+					],
+				});
+
+				await runWrangler("deploy index.js --outdir tmp --dry-run");
+				expect(std.out).toMatchInlineSnapshot(`
+					"Total Upload: xx KiB / gzip: xx KiB
+					Your Worker has access to the following bindings:
+					Binding                                            Resource
+					env.EXAMPLE_DO_BINDING (ExampleDurableObject)      Durable Object
+					env.DB (UUID-1-2-3-4)                              D1 Database
+
+					--dry-run: exiting now."
+				`);
 				expect(std.err).toMatchInlineSnapshot(`""`);
 				expect(std.warn).toMatchInlineSnapshot(`""`);
 				const output = fs.readFileSync("tmp/index.js", "utf-8");
@@ -8772,9 +8815,10 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Services:
-					  - FOO: foo-service
+					Your Worker has access to the following bindings:
+					Binding                    Resource
+					env.FOO (foo-service)      Worker
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8813,9 +8857,50 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Services:
-					  - FOO: foo-service#MyHandler
+					Your Worker has access to the following bindings:
+					Binding                              Resource
+					env.FOO (foo-service#MyHandler)      Worker
+
+					Uploaded test-name (TIMINGS)
+					Deployed test-name triggers (TIMINGS)
+					  https://test-name.test-sub-domain.workers.dev
+					Current Version ID: Galaxy-Class"
+				`);
+				expect(std.err).toMatchInlineSnapshot(`""`);
+				expect(std.warn).toMatchInlineSnapshot(`""`);
+			});
+
+			it("should support service bindings with props", async () => {
+				writeWranglerConfig({
+					services: [
+						{
+							binding: "FOO",
+							service: "foo-service",
+							props: { foo: 123, bar: { baz: "hello from props" } },
+						},
+					],
+				});
+				writeWorkerSource();
+				mockSubDomainRequest();
+				mockUploadWorkerRequest({
+					expectedBindings: [
+						{
+							type: "service",
+							name: "FOO",
+							service: "foo-service",
+							props: { foo: 123, bar: { baz: "hello from props" } },
+						},
+					],
+				});
+
+				await runWrangler("deploy index.js");
+				expect(std.out).toMatchInlineSnapshot(`
+					"Total Upload: xx KiB / gzip: xx KiB
+					Worker Startup Time: 100 ms
+					Your Worker has access to the following bindings:
+					Binding                    Resource
+					env.FOO (foo-service)      Worker
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8845,9 +8930,10 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Analytics Engine Datasets:
-					  - FOO: foo-dataset
+					Your Worker has access to the following bindings:
+					Binding                    Resource
+					env.FOO (foo-dataset)      Analytics Engine Dataset
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8883,9 +8969,10 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Dispatch Namespaces:
-					  - foo: Foo
+					Your Worker has access to the following bindings:
+					Binding            Resource
+					env.foo (Foo)      Dispatch Namespace
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8941,10 +9028,11 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Dispatch Namespaces:
-					  - foo: Foo (outbound -> foo_outbound)
-					  - bar: Bar (outbound -> bar_outbound)
+					Your Worker has access to the following bindings:
+					Binding                                       Resource
+					env.foo (Foo (outbound -> foo_outbound))      Dispatch Namespace
+					env.bar (Bar (outbound -> bar_outbound))      Dispatch Namespace
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -8992,9 +9080,10 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					Your worker has access to the following bindings:
-					- Dispatch Namespaces:
-					  - foo: Foo (outbound -> foo_outbound)
+					Your Worker has access to the following bindings:
+					Binding                                       Resource
+					env.foo (Foo (outbound -> foo_outbound))      Dispatch Namespace
+
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -9036,11 +9125,12 @@ addEventListener('fetch', event => {});`
 					expect(std.out).toMatchInlineSnapshot(`
 						"Total Upload: xx KiB / gzip: xx KiB
 						Worker Startup Time: 100 ms
-						Your worker has access to the following bindings:
-						- Unsafe Metadata:
-						  - stringify: true
-						  - something: \\"else\\"
-						  - nested: {\\"stuff\\":\\"here\\"}
+						Your Worker has access to the following bindings:
+						Binding                               Resource
+						env.stringify (true)                  Unsafe Metadata
+						env.something (\\"else\\")                Unsafe Metadata
+						env.nested ({\\"stuff\\":\\"here\\"})         Unsafe Metadata
+
 						Uploaded test-name (TIMINGS)
 						Deployed test-name triggers (TIMINGS)
 						  https://test-name.test-sub-domain.workers.dev
@@ -9077,9 +9167,10 @@ addEventListener('fetch', event => {});`
 					expect(std.out).toMatchInlineSnapshot(`
 						"Total Upload: xx KiB / gzip: xx KiB
 						Worker Startup Time: 100 ms
-						Your worker has access to the following bindings:
-						- Unsafe Metadata:
-						  - binding-type: my-binding
+						Your Worker has access to the following bindings:
+						Binding                            Resource
+						env.binding-type (my-binding)      Unsafe Metadata
+
 						Uploaded test-name (TIMINGS)
 						Deployed test-name triggers (TIMINGS)
 						  https://test-name.test-sub-domain.workers.dev
@@ -9124,9 +9215,10 @@ addEventListener('fetch', event => {});`
 					expect(std.out).toMatchInlineSnapshot(`
 						"Total Upload: xx KiB / gzip: xx KiB
 						Worker Startup Time: 100 ms
-						Your worker has access to the following bindings:
-						- Unsafe Metadata:
-						  - plain_text: my-binding
+						Your Worker has access to the following bindings:
+						Binding                          Resource
+						env.plain_text (my-binding)      Unsafe Metadata
+
 						Uploaded test-name (TIMINGS)
 						Deployed test-name triggers (TIMINGS)
 						  https://test-name.test-sub-domain.workers.dev
@@ -9167,7 +9259,6 @@ addEventListener('fetch', event => {});`
 					expect(std.out).toMatchInlineSnapshot(`
 						"Total Upload: xx KiB / gzip: xx KiB
 						Worker Startup Time: 100 ms
-						No bindings found.
 						Uploaded test-name (TIMINGS)
 						Deployed test-name triggers (TIMINGS)
 						  https://test-name.test-sub-domain.workers.dev
@@ -9272,7 +9363,6 @@ addEventListener('fetch', event => {});`
 					expect(std.out).toMatchInlineSnapshot(`
 						"Total Upload: xx KiB / gzip: xx KiB
 						Worker Startup Time: 100 ms
-						No bindings found.
 						Uploaded test-name (TIMINGS)
 						Deployed test-name triggers (TIMINGS)
 						  https://test-name.test-sub-domain.workers.dev
@@ -9318,7 +9408,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -9350,7 +9439,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -9388,7 +9476,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -9490,7 +9577,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -9522,7 +9608,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -9555,7 +9640,6 @@ addEventListener('fetch', event => {});`
 				expect(std.out).toMatchInlineSnapshot(`
 					"Total Upload: xx KiB / gzip: xx KiB
 					Worker Startup Time: 100 ms
-					No bindings found.
 					Uploaded test-name (TIMINGS)
 					Deployed test-name triggers (TIMINGS)
 					  https://test-name.test-sub-domain.workers.dev
@@ -9699,7 +9783,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -9731,7 +9814,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -9765,7 +9847,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -9797,7 +9878,6 @@ addEventListener('fetch', event => {});`
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -9842,7 +9922,6 @@ addEventListener('fetch', event => {});`
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -9895,7 +9974,6 @@ addEventListener('fetch', event => {});`
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -9922,7 +10000,6 @@ addEventListener('fetch', event => {});`
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -9980,7 +10057,6 @@ export default{
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -10006,7 +10082,6 @@ export default{
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -10096,7 +10171,6 @@ export default{
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -10188,9 +10262,10 @@ export default{
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- KV Namespaces:
-				  - KV: kv-namespace-id
+				Your Worker has access to the following bindings:
+				Binding                       Resource
+				env.KV (kv-namespace-id)      KV Namespace
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -10216,7 +10291,6 @@ export default{
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -10306,7 +10380,6 @@ export default{
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -10398,9 +10471,10 @@ export default{
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- KV Namespaces:
-				  - KV: kv-namespace-id
+				Your Worker has access to the following bindings:
+				Binding                       Resource
+				env.KV (kv-namespace-id)      KV Namespace
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -10433,18 +10507,19 @@ export default{
 			vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
 			await runWrangler("deploy index.js --dry-run");
 			expect(std).toMatchInlineSnapshot(`
-			Object {
-			  "debug": "",
-			  "err": "",
-			  "info": "",
-			  "out": "Total Upload: xx KiB / gzip: xx KiB
-			Your worker has access to the following bindings:
-			- Durable Objects:
-			  - NAME: SomeClass
-			--dry-run: exiting now.",
-			  "warn": "",
-			}
-		`);
+				Object {
+				  "debug": "",
+				  "err": "",
+				  "info": "",
+				  "out": "Total Upload: xx KiB / gzip: xx KiB
+				Your Worker has access to the following bindings:
+				Binding                   Resource
+				env.NAME (SomeClass)      Durable Object
+
+				--dry-run: exiting now.",
+				  "warn": "",
+				}
+			`);
 		});
 	});
 
@@ -10702,7 +10777,6 @@ export default{
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -10767,7 +10841,6 @@ export default{
 				  "err": "",
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
-				No bindings found.
 
 				[31mX [41;31m[[41;97mERROR[41;31m][0m [1mA request to the Cloudflare API (/accounts/some-account-id/workers/scripts/test-name/versions) failed.[0m
 
@@ -10840,7 +10913,6 @@ export default{
 				  "err": "",
 				  "info": "",
 				  "out": "Total Upload: xx KiB / gzip: xx KiB
-				No bindings found.
 
 				[31mX [41;31m[[41;97mERROR[41;31m][0m [1mA request to the Cloudflare API (/accounts/some-account-id/workers/scripts/test-name/versions) failed.[0m
 
@@ -11070,9 +11142,10 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- Queues:
-				  - QUEUE_ONE: queue1
+				Your Worker has access to the following bindings:
+				Binding                     Resource
+				env.QUEUE_ONE (queue1)      Queue
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -11117,9 +11190,10 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- Queues:
-				  - MY_QUEUE: queue1
+				Your Worker has access to the following bindings:
+				Binding                    Resource
+				env.MY_QUEUE (queue1)      Queue
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -11172,7 +11246,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -11226,7 +11299,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded command-line-arg-script-name (TIMINGS)
 				Deployed command-line-arg-script-name triggers (TIMINGS)
 				  https://command-line-arg-script-name.test-sub-domain.workers.dev
@@ -11287,7 +11359,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -11353,7 +11424,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -11406,7 +11476,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -11467,7 +11536,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -11528,7 +11596,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -11590,7 +11657,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -11652,7 +11718,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -11867,11 +11932,11 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- Browser:
-				  - Name: MYBROWSER
-				- AI:
-				  - Name: AI_BIND
+				Your Worker has access to the following bindings:
+				Binding               Resource
+				env.MYBROWSER         Browser
+				env.AI_BIND           AI
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -11900,9 +11965,10 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- Images:
-				  - Name: IMAGES_BIND
+				Your Worker has access to the following bindings:
+				Binding                 Resource
+				env.IMAGES_BIND         Images
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -11917,32 +11983,82 @@ export default{
 				main: "index.py",
 				compatibility_flags: ["python_workers"],
 			});
-			await fs.promises.writeFile(
-				"index.py",
-				"from js import Response;\ndef fetch(request):\n return Response.new('hello')"
-			);
+			const expectedModules = {
+				"index.py":
+					"from js import Response;\ndef fetch(request):\n return Response.new('hello')",
+			};
+			await fs.promises.writeFile("index.py", expectedModules["index.py"]);
 			mockSubDomainRequest();
 			mockUploadWorkerRequest({
 				expectedMainModule: "index.py",
+				expectedModules,
 			});
 
 			await runWrangler("deploy");
-			expect(
-				std.out.replace(
-					/.wrangler\/tmp\/deploy-(.+)\/index.py/,
-					".wrangler/tmp/deploy/index.py"
-				)
-			).toMatchInlineSnapshot(`
-				"┌──────────────────────────────────────┬────────┬──────────┐
-				│ Name                                 │ Type   │ Size     │
-				├──────────────────────────────────────┼────────┼──────────┤
-				│ .wrangler/tmp/deploy/index.py │ python │ xx KiB │
-				├──────────────────────────────────────┼────────┼──────────┤
-				│ Total (1 module)                     │        │ xx KiB │
-				└──────────────────────────────────────┴────────┴──────────┘
+			expect(std.out).toMatchInlineSnapshot(`
+				"Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
+				Uploaded test-name (TIMINGS)
+				Deployed test-name triggers (TIMINGS)
+				  https://test-name.test-sub-domain.workers.dev
+				Current Version ID: Galaxy-Class"
+			`);
+		});
+
+		it("should print vendor modules correctly in table", async () => {
+			writeWranglerConfig({
+				main: "index.py",
+				compatibility_flags: ["python_workers"],
+			});
+
+			// Create main Python file
+			const mainPython =
+				"from js import Response;\ndef fetch(request):\n return Response.new('hello')";
+			await fs.promises.writeFile("index.py", mainPython);
+
+			// Create vendor directory and files
+			await fs.promises.mkdir("vendor", { recursive: true });
+			await fs.promises.writeFile(
+				"vendor/module1.so",
+				"binary content for module 1"
+			);
+			await fs.promises.writeFile(
+				"vendor/module2.py",
+				"# Python vendor module 2\nprint('hello')"
+			);
+
+			// Create a regular Python module
+			await fs.promises.writeFile(
+				"helper.py",
+				"# Helper module\ndef helper(): pass"
+			);
+
+			const expectedModules = {
+				"index.py": mainPython,
+				"helper.py": "# Helper module\ndef helper(): pass",
+			};
+
+			mockSubDomainRequest();
+			mockUploadWorkerRequest({
+				expectedMainModule: "index.py",
+				expectedModules,
+			});
+
+			await runWrangler("deploy");
+
+			// Check that the table output shows vendor modules aggregated correctly
+			expect(std.out).toMatchInlineSnapshot(`
+				"┌─┬─┬─┐
+				│ Name │ Type │ Size │
+				├─┼─┼─┤
+				│ helper.py │ python │ xx KiB │
+				├─┼─┼─┤
+				│ Vendored Modules │ │ xx KiB │
+				├─┼─┼─┤
+				│ Total (3 modules) │ │ xx KiB │
+				└─┴─┴─┘
 				Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -11954,32 +12070,21 @@ export default{
 			writeWranglerConfig({
 				compatibility_flags: ["python_workers"],
 			});
-			await fs.promises.writeFile(
-				"index.py",
-				"from js import Response;\ndef fetch(request):\n return Response.new('hello')"
-			);
+			const expectedModules = {
+				"index.py":
+					"from js import Response;\ndef fetch(request):\n return Response.new('hello')",
+			};
+			await fs.promises.writeFile("index.py", expectedModules["index.py"]);
 			mockSubDomainRequest();
 			mockUploadWorkerRequest({
 				expectedMainModule: "index.py",
+				expectedModules,
 			});
 
 			await runWrangler("deploy index.py");
-			expect(
-				std.out.replace(
-					/.wrangler\/tmp\/deploy-(.+)\/index.py/,
-					".wrangler/tmp/deploy/index.py"
-				)
-			).toMatchInlineSnapshot(`
-				"┌──────────────────────────────────────┬────────┬──────────┐
-				│ Name                                 │ Type   │ Size     │
-				├──────────────────────────────────────┼────────┼──────────┤
-				│ .wrangler/tmp/deploy/index.py │ python │ xx KiB │
-				├──────────────────────────────────────┼────────┼──────────┤
-				│ Total (1 module)                     │        │ xx KiB │
-				└──────────────────────────────────────┴────────┴──────────┘
-				Total Upload: xx KiB / gzip: xx KiB
+			expect(std.out).toMatchInlineSnapshot(`
+				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -12014,9 +12119,10 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- Hyperdrive Configs:
-				  - HYPERDRIVE: 343cd4f1d58c42fbb5bd082592fd7143
+				Your Worker has access to the following bindings:
+				Binding                                                Resource
+				env.HYPERDRIVE (343cd4f1d58c42fbb5bd082592fd7143)      Hyperdrive Config
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -12046,9 +12152,10 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- mTLS Certificates:
-				  - CERT_ONE: 1234
+				Your Worker has access to the following bindings:
+				Binding                  Resource
+				env.CERT_ONE (1234)      mTLS Certificate
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -12081,16 +12188,17 @@ export default{
 
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
-			"Total Upload: xx KiB / gzip: xx KiB
-			Worker Startup Time: 100 ms
-			Your worker has access to the following bindings:
-			- Pipelines:
-			  - MY_PIPELINE: my-pipeline
-			Uploaded test-name (TIMINGS)
-			Deployed test-name triggers (TIMINGS)
-			  https://test-name.test-sub-domain.workers.dev
-			Current Version ID: Galaxy-Class"
-		`);
+				"Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
+				Your Worker has access to the following bindings:
+				Binding                            Resource
+				env.MY_PIPELINE (my-pipeline)      Pipeline
+
+				Uploaded test-name (TIMINGS)
+				Deployed test-name triggers (TIMINGS)
+				  https://test-name.test-sub-domain.workers.dev
+				Current Version ID: Galaxy-Class"
+			`);
 		});
 	});
 
@@ -12120,16 +12228,17 @@ export default{
 
 			await runWrangler("deploy index.js");
 			expect(std.out).toMatchInlineSnapshot(`
-			"Total Upload: xx KiB / gzip: xx KiB
-			Worker Startup Time: 100 ms
-			Your worker has access to the following bindings:
-			- Secrets Store Secrets:
-			  - SECRET: store_id/secret_name
-			Uploaded test-name (TIMINGS)
-			Deployed test-name triggers (TIMINGS)
-			  https://test-name.test-sub-domain.workers.dev
-			Current Version ID: Galaxy-Class"
-		`);
+				"Total Upload: xx KiB / gzip: xx KiB
+				Worker Startup Time: 100 ms
+				Your Worker has access to the following bindings:
+				Binding                                Resource
+				env.SECRET (store_id/secret_name)      Secrets Store Secret
+
+				Uploaded test-name (TIMINGS)
+				Deployed test-name triggers (TIMINGS)
+				  https://test-name.test-sub-domain.workers.dev
+				Current Version ID: Galaxy-Class"
+			`);
 		});
 	});
 
@@ -12150,7 +12259,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -12175,7 +12283,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -12202,13 +12309,40 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
 				Current Version ID: Galaxy-Class"
 			`);
 			expect(std.err).toMatchInlineSnapshot(`""`);
+		});
+	});
+
+	describe("--metafile", () => {
+		it("should output a metafile when --metafile is set", async () => {
+			writeWranglerConfig();
+			writeWorkerSource();
+			await runWrangler("deploy index.js --metafile --dry-run --outdir=dist");
+
+			// Check if file exists
+			const metafilePath = path.join(process.cwd(), "dist", "bundle-meta.json");
+			expect(fs.existsSync(metafilePath)).toBe(true);
+			const metafile = JSON.parse(fs.readFileSync(metafilePath, "utf8"));
+			expect(metafile.inputs).toBeDefined();
+			expect(metafile.outputs).toBeDefined();
+		});
+
+		it("should output a metafile when --metafile=./meta.json is set", async () => {
+			writeWranglerConfig();
+			writeWorkerSource();
+			await runWrangler("deploy index.js --metafile=./meta.json --dry-run");
+
+			// Check if file exists
+			const metafilePath = path.join(process.cwd(), "meta.json");
+			expect(fs.existsSync(metafilePath)).toBe(true);
+			const metafile = JSON.parse(fs.readFileSync(metafilePath, "utf8"));
+			expect(metafile.inputs).toBeDefined();
+			expect(metafile.outputs).toBeDefined();
 		});
 	});
 
@@ -12234,7 +12368,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				  Dispatch Namespace: test-dispatch-namespace
 				Current Version ID: undefined"
@@ -12263,7 +12396,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -12301,7 +12433,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -12325,7 +12456,6 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				No bindings found.
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -12350,7 +12480,7 @@ export default{
 			msw.use(handler);
 		}
 
-		it("should log open-beta warning when deploying a workflow", async () => {
+		it("should deploy a workflow", async () => {
 			writeWranglerConfig({
 				main: "index.js",
 				workflows: [
@@ -12385,17 +12515,14 @@ export default{
 
 			await runWrangler("deploy");
 
-			expect(std.warn).toMatchInlineSnapshot(`
-				"[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mWorkflows is currently in open beta.[0m
-
-				"
-			`);
+			expect(std.warn).toMatchInlineSnapshot(`""`);
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- Workflows:
-				  - WORKFLOW: MyWorkflow
+				Your Worker has access to the following bindings:
+				Binding                        Resource
+				env.WORKFLOW (MyWorkflow)      Workflow
+
 				Uploaded test-name (TIMINGS)
 				Deployed test-name triggers (TIMINGS)
 				  https://test-name.test-sub-domain.workers.dev
@@ -12454,14 +12581,141 @@ export default{
 			expect(std.out).toMatchInlineSnapshot(`
 				"Total Upload: xx KiB / gzip: xx KiB
 				Worker Startup Time: 100 ms
-				Your worker has access to the following bindings:
-				- Workflows:
-				  - WORKFLOW: MyWorkflow (defined in another-script)
+				Your Worker has access to the following bindings:
+				Binding                                                    Resource
+				env.WORKFLOW (MyWorkflow (defined in another-script))      Workflow
+
 				Uploaded this-script (TIMINGS)
 				Deployed this-script triggers (TIMINGS)
 				  https://this-script.test-sub-domain.workers.dev
 				Current Version ID: Galaxy-Class"
 			`);
+		});
+	});
+
+	describe("compliance region support", () => {
+		it("should upload to the public region by default", async () => {
+			writeWranglerConfig({});
+			writeWorkerSource();
+			mockUploadWorkerRequest({
+				expectedBaseUrl: "api.cloudflare.com",
+			});
+			mockSubDomainRequest();
+			mockGetWorkerSubdomain({ enabled: true });
+
+			await runWrangler("deploy ./index.js");
+		});
+
+		it("should upload to the FedRAMP High region if set in config", async () => {
+			writeWranglerConfig({
+				compliance_region: "fedramp_high",
+			});
+			writeWorkerSource();
+			mockUploadWorkerRequest({
+				expectedBaseUrl: "api.fed.cloudflare.com",
+			});
+			mockSubDomainRequest();
+			mockGetWorkerSubdomain({ enabled: true });
+
+			await runWrangler("deploy ./index.js");
+		});
+
+		it("should upload to the FedRAMP High region if set in an env var", async () => {
+			vi.stubEnv("CLOUDFLARE_COMPLIANCE_REGION", "fedramp_high");
+			writeWranglerConfig({});
+			writeWorkerSource();
+			mockUploadWorkerRequest({
+				expectedBaseUrl: "api.fed.cloudflare.com",
+			});
+			mockSubDomainRequest();
+			mockGetWorkerSubdomain({ enabled: true });
+
+			await runWrangler("deploy ./index.js");
+		});
+
+		it("should error if the region is set in both env var and configured, and they conflict", async () => {
+			vi.stubEnv("CLOUDFLARE_COMPLIANCE_REGION", "public");
+			writeWranglerConfig({ compliance_region: "fedramp_high" });
+			writeWorkerSource();
+
+			await expect(runWrangler("deploy ./index.js")).rejects
+				.toThrowErrorMatchingInlineSnapshot(`
+				[Error: The compliance region has been set to different values in two places:
+				 - \`CLOUDFLARE_COMPLIANCE_REGION\` environment variable: \`public\`
+				 - \`compliance_region\` configuration property: \`fedramp_high\`]
+			`);
+		});
+
+		it("should not error if the region is set in both env var and configured, and they are the same", async () => {
+			vi.stubEnv("CLOUDFLARE_COMPLIANCE_REGION", "fedramp_high");
+			writeWranglerConfig({ compliance_region: "fedramp_high" });
+			writeWorkerSource();
+			mockUploadWorkerRequest({
+				expectedBaseUrl: "api.fed.cloudflare.com",
+			});
+			mockSubDomainRequest();
+			mockGetWorkerSubdomain({ enabled: true });
+
+			await runWrangler("deploy ./index.js");
+		});
+	});
+
+	describe("multi-env warning", () => {
+		it("should warn if the wrangler config contains environments but none was specified in the command", async () => {
+			writeWorkerSource();
+			writeWranglerConfig({
+				main: "./index.js",
+				env: {
+					test: {},
+				},
+			});
+			mockSubDomainRequest();
+			mockUploadWorkerRequest();
+
+			await runWrangler("deploy");
+
+			expect(std.warn).toMatchInlineSnapshot(`
+				"[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mMultiple environments are defined in the Wrangler configuration file, but no target environment was specified for the deploy command.[0m
+
+				  To avoid unintentional changes to the wrong environment, it is recommended to explicitly specify
+				  the target environment using the \`-e|--env\` flag.
+				  If your intention is to use the top-level environment of your configuration simply pass an empty
+				  string to the flag to target such environment. For example \`--env=\\"\\"\`.
+
+				"
+			`);
+		});
+
+		it("should not warn if the wrangler config contains environments and one was specified in the command", async () => {
+			writeWorkerSource();
+			writeWranglerConfig({
+				main: "./index.js",
+				env: {
+					test: {},
+				},
+			});
+			mockSubDomainRequest();
+			mockUploadWorkerRequest({
+				env: "test",
+				legacyEnv: true,
+			});
+
+			await runWrangler("deploy -e test");
+
+			expect(std.warn).toMatchInlineSnapshot(`""`);
+		});
+
+		it("should not warn if the wrangler config doesn't contain environments and none was specified in the command", async () => {
+			writeWorkerSource();
+			writeWranglerConfig({
+				main: "./index.js",
+			});
+			mockSubDomainRequest();
+			mockUploadWorkerRequest();
+
+			await runWrangler("deploy");
+
+			expect(std.warn).toMatchInlineSnapshot(`""`);
 		});
 	});
 });
@@ -12485,6 +12739,38 @@ function mockDeploymentsListRequest() {
 
 function mockLastDeploymentRequest() {
 	msw.use(...mswSuccessDeploymentScriptMetadata);
+}
+
+function mockPublishSchedulesRequest({
+	crons = [],
+	env = undefined,
+	legacyEnv = false,
+}: {
+	crons: Config["triggers"]["crons"];
+	env?: string | undefined;
+	legacyEnv?: boolean | undefined;
+}) {
+	const servicesOrScripts = env && !legacyEnv ? "services" : "scripts";
+	const environment = env && !legacyEnv ? "/environments/:envName" : "";
+
+	msw.use(
+		http.put(
+			`*/accounts/:accountId/workers/${servicesOrScripts}/:scriptName${environment}/schedules`,
+			async ({ request, params }) => {
+				expect(params.accountId).toEqual("some-account-id");
+				expect(params.scriptName).toEqual(
+					legacyEnv && env ? `test-name-${env}` : "test-name"
+				);
+				if (!legacyEnv) {
+					expect(params.envName).toEqual(env);
+				}
+				const body = (await request.json()) as [{ cron: string }];
+				expect(body).toEqual(crons.map((cron) => ({ cron })));
+				return HttpResponse.json(createFetchResult(null));
+			},
+			{ once: true }
+		)
+	);
 }
 
 function mockPublishRoutesRequest({
@@ -12805,27 +13091,6 @@ function mockDeleteUnusedAssetsRequest(
 					errors: [],
 					messages: [],
 					result: null,
-				});
-			},
-			{ once: true }
-		)
-	);
-}
-
-type LegacyScriptInfo = { id: string; migration_tag?: string };
-
-function mockLegacyScriptData(options: { scripts: LegacyScriptInfo[] }) {
-	const { scripts } = options;
-	msw.use(
-		http.get(
-			"*/accounts/:accountId/workers/scripts",
-			({ params }) => {
-				expect(params.accountId).toEqual("some-account-id");
-				return HttpResponse.json({
-					success: true,
-					errors: [],
-					messages: [],
-					result: scripts,
 				});
 			},
 			{ once: true }
@@ -13217,9 +13482,15 @@ const mockAssetUploadRequest = async (
 	);
 };
 expect.extend({
-	async toBeAFileWhichMatches(received: File, expected: File) {
+	async toBeAFileWhichMatches(
+		received: File,
+		expected: {
+			fileBits: string[];
+			name: string;
+			type: string;
+		}
+	) {
 		const { equals } = this;
-
 		if (!equals(received.name, expected.name)) {
 			return {
 				pass: false,
@@ -13228,7 +13499,7 @@ expect.extend({
 			};
 		}
 
-		if (!equals(received.type, expected.type)) {
+		if (!equals(received.type, expect.stringMatching(expected.type))) {
 			return {
 				pass: false,
 				message: () =>
@@ -13237,7 +13508,9 @@ expect.extend({
 		}
 
 		const receviedText = await received.text();
-		const expectedText = await expected.text();
+		const expectedText = await new File(expected.fileBits, expected.name, {
+			type: expected.type,
+		}).text();
 		if (!equals(receviedText, expectedText)) {
 			return {
 				pass: false,
@@ -13254,7 +13527,11 @@ expect.extend({
 });
 
 interface CustomMatchers {
-	toBeAFileWhichMatches: (expected: File) => unknown;
+	toBeAFileWhichMatches: (expected: {
+		fileBits: string[];
+		name: string;
+		type: string;
+	}) => unknown;
 }
 
 declare module "vitest" {

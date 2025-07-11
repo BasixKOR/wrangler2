@@ -1,12 +1,22 @@
 import assert from "node:assert";
-import childProcess from "node:child_process";
+import childProcess, { execSync } from "node:child_process";
 import fs from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import rl from "node:readline";
 import stream from "node:stream";
+import { setTimeout } from "node:timers/promises";
 import stripAnsi from "strip-ansi";
 import { fetch } from "undici";
-import { afterEach, describe as baseDescribe, expect, it } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	describe as baseDescribe,
+	beforeAll,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { wranglerEntryPath } from "../../shared/src/run-wrangler-long-lived";
 import type pty from "@cdktf/node-pty-prebuilt-multiarch";
 
@@ -137,7 +147,7 @@ async function startWranglerDev(args: string[], skipWaitingForReady = false) {
 	if (!skipWaitingForReady) {
 		let readyMatch: RegExpMatchArray | null = null;
 		for await (const line of stdoutInterface) {
-			if ((readyMatch = readyRegexp.exec(line)) !== null) break;
+			if ((readyMatch = readyRegexp.exec(stripAnsi(line))) !== null) break;
 		}
 		assert(readyMatch !== null, "Expected ready message");
 		result.url = readyMatch[1];
@@ -227,6 +237,29 @@ describe.each(devScripts)("wrangler $args", ({ args, expectedBody }) => {
 			expect(duringProcesses.length).toBeGreaterThan(beginProcesses.length);
 		}
 	});
+	describe("--show-interactive-dev-session", () => {
+		it("should show hotkeys when interactive", async () => {
+			const wrangler = await startWranglerDev(args);
+			wrangler.pty.kill();
+			expect(wrangler.stdout).toContain("open a browser");
+			expect(wrangler.stdout).toContain("open devtools");
+			expect(wrangler.stdout).toContain("clear console");
+			expect(wrangler.stdout).toContain("to exit");
+			expect(wrangler.stdout).not.toContain("rebuild container");
+		});
+		it("should not show hotkeys with --show-interactive-dev-session=false", async () => {
+			const wrangler = await startWranglerDev([
+				...args,
+				"--show-interactive-dev-session=false",
+			]);
+			wrangler.pty.kill();
+			expect(wrangler.stdout).not.toContain("open a browser");
+			expect(wrangler.stdout).not.toContain("open devtools");
+			expect(wrangler.stdout).not.toContain("clear console");
+			expect(wrangler.stdout).not.toContain("to exit");
+			expect(wrangler.stdout).not.toContain("rebuild container");
+		});
+	});
 });
 
 it.each(exitKeys)("multiworker cleanly exits with $name", async ({ key }) => {
@@ -235,9 +268,9 @@ it.each(exitKeys)("multiworker cleanly exits with $name", async ({ key }) => {
 	const wrangler = await startWranglerDev([
 		"dev",
 		"-c",
-		"wrangler.a.toml",
+		"wrangler.a.jsonc",
 		"-c",
-		"wrangler.b.toml",
+		"wrangler.b.jsonc",
 	]);
 	const duringProcesses = getStartedWorkerdProcesses();
 
@@ -257,26 +290,293 @@ it.each(exitKeys)("multiworker cleanly exits with $name", async ({ key }) => {
 	}
 });
 
-it.runIf(RUN_IF && nodePtySupported)(
-	"hotkeys should be unregistered when the initial build fails",
-	async () => {
-		const wrangler = await startWranglerDev(
-			["dev", "src/startup-error.ts"],
-			true
-		);
+// it seems like if we spam the container too often, it freezes up and crashes
+const WAITFOR_OPTIONS = { timeout: 2000, interval: 500 };
+baseDescribe.skipIf(process.platform !== "linux" && process.env.CI === "true")(
+	"container dev",
+	{ retry: 0, timeout: 90000 },
+	() => {
+		let tmpDir: string;
+		beforeAll(async () => {
+			tmpDir = fs.mkdtempSync(path.join(tmpdir(), "wrangler-container-"));
+			fs.cpSync(
+				path.resolve(__dirname, "../", "container-app"),
+				path.join(tmpDir),
+				{
+					recursive: true,
+				}
+			);
 
-		expect(await wrangler.exitPromise).toBe(1);
+			const ids = getContainerIds();
+			if (ids.length > 0) {
+				execSync("docker rm -f " + ids.join(" "), {
+					encoding: "utf8",
+				});
+			}
+		});
 
-		const hotkeysRenderCount = [
-			...wrangler.stdout.matchAll(/\[b\] open a browser/g),
-		];
+		afterEach(async () => {
+			const ids = getContainerIds();
+			if (ids.length > 0) {
+				execSync("docker rm -f " + ids.join(" "), {
+					encoding: "utf8",
+				});
+			}
+		});
+		afterAll(async () => {
+			try {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			} catch (e) {
+				// It seems that Windows doesn't let us delete this, with errors like:
+				//
+				// Error: EBUSY: resource busy or locked, rmdir 'C:\Users\RUNNER~1\AppData\Local\Temp\wrangler-modules-pKJ7OQ'
+				// ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+				// Serialized Error: {
+				// 	"code": "EBUSY",
+				// 	"errno": -4082,
+				// 	"path": "C:\Users\RUNNER~1\AppData\Local\Temp\wrangler-modules-pKJ7OQ",
+				// 	"syscall": "rmdir",
+				// }
+				console.error(e);
+			}
+		});
 
-		const clearHotkeysCount = [
-			// This is the control sequence for moving the cursor up and then clearing from the cursor to the end
-			...wrangler.stdout.matchAll(/\[\dA\[0J/g),
-		];
+		it("should print rebuild containers hotkey", async () => {
+			const wrangler = await startWranglerDev([
+				"dev",
+				"-c",
+				path.join(tmpDir, "wrangler.jsonc"),
+			]);
+			wrangler.pty.kill();
+			expect(wrangler.stdout).toContain("rebuild container");
+		});
 
-		// The hotkeys should be rendered the same number of times as the control sequence for clearing them from the screen
-		expect(hotkeysRenderCount.length).toBe(clearHotkeysCount.length);
+		it("should rebuild a container when the hotkey is pressed", async () => {
+			const wrangler = await startWranglerDev([
+				"dev",
+				"-c",
+				path.join(tmpDir, "wrangler.jsonc"),
+			]);
+			await fetch(wrangler.url + "/start");
+
+			// wait container to be ready
+			await vi.waitFor(async () => {
+				const status = await fetch(wrangler.url + "/status");
+				expect(await status.json()).toBe(true);
+			}, WAITFOR_OPTIONS);
+
+			await vi.waitFor(async () => {
+				const res = await fetch(wrangler.url + "/fetch");
+
+				expect(await res.text()).toBe(
+					"Hello World! Have an env var! I'm an env var!"
+				);
+			}, WAITFOR_OPTIONS);
+
+			fs.writeFileSync(
+				path.join(tmpDir, "container", "simple-node-app.js"),
+				`const { createServer } = require("http");
+
+				const server = createServer(function (req, res) {
+					res.writeHead(200, { "Content-Type": "text/plain" });
+					res.write("Blah! " + process.env.MESSAGE);
+					res.end();
+				});
+
+				server.listen(8080, function () {
+					console.log("Server listening on port 8080");
+				});`,
+				"utf-8"
+			);
+
+			wrangler.pty.write("r");
+
+			// wait for build to finish
+			await vi.waitFor(async () => {
+				const status = await fetch(wrangler.url + "/status");
+				expect(await status.json()).toBe(false);
+			}, WAITFOR_OPTIONS);
+
+			await fetch(wrangler.url + "/start");
+			await vi.waitFor(async () => {
+				const status = await fetch(wrangler.url + "/status");
+				expect(await status.json()).toBe(true);
+			}, WAITFOR_OPTIONS);
+			await vi.waitFor(async () => {
+				const res = await fetch(wrangler.url + "/fetch");
+				expect(await res.text()).toBe("Blah! I'm an env var!");
+			}, WAITFOR_OPTIONS);
+			wrangler.pty.kill();
+		});
+
+		it("should clean up any containers that were started", async () => {
+			const wrangler = await startWranglerDev([
+				"dev",
+				"-c",
+				path.join(tmpDir, "wrangler.jsonc"),
+			]);
+			await fetch(wrangler.url + "/start");
+			// wait container to be ready
+			await vi.waitFor(async () => {
+				const status = await fetch(wrangler.url + "/status");
+				expect(await status.json()).toBe(true);
+			}, WAITFOR_OPTIONS);
+			const ids = getContainerIds();
+			expect(ids.length).toBe(1);
+
+			wrangler.pty.kill("SIGINT");
+			await new Promise<void>((resolve) => {
+				wrangler.pty.onExit(() => resolve());
+			});
+			vi.waitFor(() => {
+				const remainingIds = getContainerIds();
+				expect(remainingIds.length).toBe(0);
+			});
+		});
 	}
 );
+
+baseDescribe.skipIf(process.platform !== "linux" && process.env.CI === "true")(
+	"container dev where image build takes a long time",
+	{ retry: 0, timeout: 90000 },
+	() => {
+		let tmpDir: string;
+		beforeAll(async () => {
+			tmpDir = fs.mkdtempSync(path.join(tmpdir(), "wrangler-container-sleep-"));
+			fs.cpSync(
+				path.resolve(__dirname, "../", "container-app"),
+				path.join(tmpDir),
+				{
+					recursive: true,
+				}
+			);
+			const tmpDockerFilePath = path.join(tmpDir, "Dockerfile");
+			fs.rmSync(tmpDockerFilePath);
+			fs.renameSync(
+				path.join(tmpDir, "DockerfileWithLongSleep"),
+				tmpDockerFilePath
+			);
+
+			const ids = getContainerIds();
+			if (ids.length > 0) {
+				execSync("docker rm -f " + ids.join(" "), {
+					encoding: "utf8",
+				});
+			}
+		});
+
+		afterEach(async () => {
+			const ids = getContainerIds();
+			if (ids.length > 0) {
+				execSync("docker rm -f " + ids.join(" "), {
+					encoding: "utf8",
+				});
+			}
+		});
+
+		afterAll(async () => {
+			try {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			} catch (e) {
+				// It seems that Windows doesn't let us delete this, with errors like:
+				//
+				// Error: EBUSY: resource busy or locked, rmdir 'C:\Users\RUNNER~1\AppData\Local\Temp\wrangler-modules-pKJ7OQ'
+				// ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+				// Serialized Error: {
+				// 	"code": "EBUSY",
+				// 	"errno": -4082,
+				// 	"path": "C:\Users\RUNNER~1\AppData\Local\Temp\wrangler-modules-pKJ7OQ",
+				// 	"syscall": "rmdir",
+				// }
+				console.error(e);
+			}
+		});
+
+		it("should allow quitting while the image is building", async () => {
+			const wrangler = await startWranglerDev([
+				"dev",
+				"-c",
+				path.join(tmpDir, "wrangler.jsonc"),
+			]);
+
+			const waitForOptions = {
+				timeout: 10_000,
+				interval: WAITFOR_OPTIONS.interval,
+			};
+
+			// wait for long sleep instruction to start
+			await vi.waitFor(async () => {
+				expect(wrangler.stdout).toContain("RUN sleep 50000");
+			}, waitForOptions);
+
+			wrangler.pty.write("q");
+
+			await vi.waitFor(async () => {
+				expect(wrangler.stdout).toMatch(/CANCELED \[.*?\] RUN sleep 50000/);
+			}, waitForOptions);
+		});
+
+		it("should rebuilding while the image is building", async () => {
+			const wrangler = await startWranglerDev([
+				"dev",
+				"-c",
+				path.join(tmpDir, "wrangler.jsonc"),
+			]);
+
+			const waitForOptions = {
+				timeout: 15_000,
+				interval: 1_500,
+			};
+
+			// wait for long sleep instruction to start
+			await vi.waitFor(async () => {
+				expect(wrangler.stdout).toContain("RUN sleep 50000");
+			}, waitForOptions);
+
+			let logOccurrencesBefore =
+				wrangler.stdout.match(/This \(no-op\) build takes forever.../g)
+					?.length ?? 0;
+
+			wrangler.pty.write("r");
+
+			await vi.waitFor(async () => {
+				const logOccurrences =
+					wrangler.stdout.match(/This \(no-op\) build takes forever.../g)
+						?.length ?? 0;
+				expect(logOccurrences).toBeGreaterThan(1);
+				logOccurrencesBefore = logOccurrences;
+			}, waitForOptions);
+
+			await vi.waitFor(async () => {
+				await setTimeout(700);
+				wrangler.pty.write("r");
+				const logOccurrences =
+					wrangler.stdout.match(/This \(no-op\) build takes forever.../g)
+						?.length ?? 0;
+				expect(logOccurrences).toBeGreaterThan(logOccurrencesBefore);
+			}, waitForOptions);
+
+			wrangler.pty.kill();
+		});
+	}
+);
+
+/** gets any containers that were created by running this fixture */
+const getContainerIds = () => {
+	// note the -a to include stopped containers
+	const allContainers = execSync(`docker ps -a --format json`)
+		.toString()
+		.split("\n")
+		.filter((line) => line.trim());
+	if (allContainers.length === 0) {
+		return [];
+	}
+	const jsonOutput = allContainers.map((line) => JSON.parse(line));
+
+	const matches = jsonOutput.map((container) => {
+		if (container.Image.includes("cloudflare-dev/fixturetestcontainer")) {
+			return container.ID;
+		}
+	});
+	return matches.filter(Boolean);
+};

@@ -1,0 +1,24 @@
+{
+	"name": "@fixture/container-app",
+	"private": true,
+	"scripts": {
+		"cf-typegen": "wrangler types",
+		"container:build": "wrangler containers build ./ -t container-fixture",
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"dev:registry": "wrangler dev -c ./wrangler.registry.jsonc",
+		"start": "wrangler dev",
+		"start:registry": "wrangler dev -c ./wrangler.registry.jsonc"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-tsconfig": "workspace:*",
+		"@cloudflare/workers-types": "^4.20250711.0",
+		"ts-dedent": "^2.2.0",
+		"typescript": "catalog:default",
+		"wrangler": "workspace:*"
+	},
+	"volta": {
+		"node": "20.19.2",
+		"extends": "../../package.json"
+	}
+}

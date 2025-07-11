@@ -14,6 +14,12 @@ export type Project = {
 	created_on: string;
 };
 
+export type ContainerApplication = {
+	created_at: string;
+	id: string;
+	name: string;
+};
+
 export type Worker = {
 	id: string;
 	created_on: string;
@@ -58,44 +64,112 @@ class ApiError extends Error {
 	}
 }
 
-class FatalError extends Error {
-	constructor(readonly exitCode: number) {
-		super();
-	}
-}
-
-const apiFetch = async (
+async function apiFetchResponse(
 	path: string,
 	init = { method: "GET" },
-	failSilently = false,
 	queryParams = {}
-) => {
+): Promise<Response | false> {
+	const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}`;
+	let queryString = new URLSearchParams(queryParams).toString();
+	if (queryString) {
+		queryString = "?" + queryString;
+	}
+	const url = `${baseUrl}${path}${queryString}`;
+
+	const response = await fetch(url, {
+		...init,
+		headers: {
+			Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`,
+		},
+	});
+
+	if (response.status >= 400) {
+		throw { url, init, response };
+	}
+
+	return response;
+}
+
+async function apiFetch<T>(
+	path: string,
+	method: string,
+	failSilently = false
+): Promise<false | T> {
 	try {
-		const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}`;
-		let queryString = new URLSearchParams(queryParams).toString();
-		if (queryString) {
-			queryString = "?" + queryString;
-		}
-		const url = `${baseUrl}${path}${queryString}`;
+		const response = await apiFetchResponse(path, { method });
 
-		const response = await fetch(url, {
-			...init,
-			headers: {
-				Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`,
-			},
-		});
-
-		if (response.status >= 400) {
-			throw { url, init, response };
+		if (!response || response.ok === false) {
+			return false;
 		}
 
 		const json = (await response.json()) as ApiSuccessBody;
-
-		return json.result;
+		return json.result as T;
 	} catch (e) {
-		if (failSilently) {
-			return;
+		if (!failSilently) {
+			if (e instanceof ApiError) {
+				console.error(e.url, e.init);
+				console.error(`(${e.response.status}) ${e.response.statusText}`);
+				const body = (await e.response.json()) as ApiErrorBody;
+				console.error(body.errors);
+			} else {
+				console.error(e);
+			}
 		}
+		return false;
+	}
+}
+
+async function apiFetchList<T>(path: string, queryParams = {}): Promise<T[]> {
+	try {
+		let page = 1;
+		let totalCount = 0;
+		let result: unknown[] = [];
+		// eslint-disable-next-line no-constant-condition
+		while (true) {
+			const response = await apiFetchResponse(
+				path,
+				{ method: "GET" },
+				{
+					page,
+					per_page: 100,
+					...queryParams,
+				}
+			);
+
+			if (!response || response.ok === false) {
+				return [];
+			}
+
+			const json = (await response.json()) as ApiSuccessBody;
+			if ("result_info" in json && Array.isArray(json.result)) {
+				const result_info = json.result_info as {
+					page: number;
+					count: number;
+					total_count?: number;
+					total_pages?: number;
+				};
+				console.log(path, result_info);
+
+				result = [...result, ...json.result];
+
+				if (result_info.count === 0) {
+					return result as T[];
+				}
+
+				totalCount += result_info.count;
+				if (totalCount === result_info.total_count) {
+					return result as T[];
+				}
+
+				if (page === result_info.total_pages) {
+					return result as T[];
+				}
+				page = result_info.page + 1;
+			} else {
+				return json.result as T[];
+			}
+		}
+	} catch (e) {
 		if (e instanceof ApiError) {
 			console.error(e.url, e.init);
 			console.error(`(${e.response.status}) ${e.response.statusText}`);
@@ -104,28 +178,12 @@ const apiFetch = async (
 		} else {
 			console.error(e);
 		}
-		throw new FatalError(1);
+		return [];
 	}
-};
+}
 
 export const listTmpE2EProjects = async () => {
-	const pageSize = 10;
-	let page = 1;
-
-	const projects: Project[] = [];
-	while (projects.length % pageSize === 0) {
-		const res = (await apiFetch(`/pages/projects`, { method: "GET" }, false, {
-			per_page: pageSize,
-			page,
-		})) as Project[];
-		projects.push(...res);
-		page++;
-		if (res.length < pageSize) {
-			break;
-		}
-	}
-
-	return projects.filter(
+	return (await apiFetchList<Project>(`/pages/projects`)).filter(
 		(p) =>
 			p.name.startsWith("tmp-e2e-") &&
 			// Projects are more than an hour old
@@ -134,96 +192,67 @@ export const listTmpE2EProjects = async () => {
 };
 
 export const deleteProject = async (project: string) => {
-	await apiFetch(
-		`/pages/projects/${project}`,
-		{
-			method: "DELETE",
-		},
-		true
-	);
+	return await apiFetch(`/pages/projects/${project}`, "DELETE");
 };
 
 export const listTmpE2EWorkers = async () => {
-	const res = (await apiFetch(`/workers/scripts`, {
-		method: "GET",
-	})) as Worker[];
-	return res.filter(
+	return (await apiFetchList<Worker>(`/workers/scripts`)).filter(
 		(p) =>
-			p.id.startsWith("tmp-e2e-") &&
+			!p.id.startsWith("preserve-e2e-") &&
+			p.id !== "stratus-e2e-test-worker" &&
+			p.id !== "existing-script-test-do-not-delete" &&
 			// Workers are more than an hour old
 			Date.now() - new Date(p.created_on).valueOf() > 1000 * 60 * 60
 	);
 };
 
 export const deleteWorker = async (id: string) => {
-	await apiFetch(
-		`/workers/scripts/${id}`,
-		{
-			method: "DELETE",
-		},
-		true
+	return await apiFetch(`/workers/scripts/${id}`, "DELETE");
+};
+
+export const listTmpE2EContainerApplications = async () => {
+	const res = await apiFetchResponse(`/cloudchamber/applications`, {
+		method: "GET",
+	});
+	if (!res) {
+		// unreachable, but assert() is failing to pin down the type
+		throw res;
+	}
+
+	if (!res.ok) {
+		throw new Error(`${res.status}: ${await res.text()}`);
+	}
+
+	const apps = (await res.json()) as ContainerApplication[];
+	return apps.filter(
+		(app) =>
+			app.name.includes("e2e") &&
+			Date.now() - new Date(app.created_at).valueOf() > 1000 * 60 * 60
 	);
 };
 
+export const deleteContainerApplication = async (app: ContainerApplication) => {
+	return await apiFetchResponse(`/cloudchamber/applications/${app.id}`, {
+		method: "DELETE",
+	});
+};
+
 export const listTmpKVNamespaces = async () => {
-	const pageSize = 100;
-	let page = 1;
-	const results: KVNamespaceInfo[] = [];
-	while (results.length % pageSize === 0) {
-		const res = (await apiFetch(
-			`/storage/kv/namespaces`,
-			{ method: "GET" },
-			false,
-			new URLSearchParams({
-				per_page: pageSize.toString(),
-				order: "title",
-				direction: "asc",
-				page: page.toString(),
-			})
-		)) as KVNamespaceInfo[];
-		page++;
-		results.push(...res);
-		if (res.length < pageSize || page > 5) {
-			break;
-		}
-	}
-	return results.filter(
+	return (await apiFetchList<KVNamespaceInfo>(`/storage/kv/namespaces`)).filter(
 		(kv) => kv.title.includes("tmp-e2e") || kv.title.includes("tmp_e2e")
 	);
 };
 
 export const deleteKVNamespace = async (id: string) => {
-	await apiFetch(
+	return await apiFetch(
 		`/storage/kv/namespaces/${id}`,
-		{
-			method: "DELETE",
-		},
-		true
+		"DELETE",
+		/* failSilently */ true
 	);
 };
 
 export const listTmpDatabases = async () => {
-	const pageSize = 100;
-	let page = 1;
-	const results: Database[] = [];
-	while (results.length % pageSize === 0) {
-		const res = (await apiFetch(
-			`/d1/database`,
-			{ method: "GET" },
-			false,
-			new URLSearchParams({
-				per_page: pageSize.toString(),
-				page: page.toString(),
-			})
-		)) as Database[];
-		page++;
-		results.push(...res);
-
-		if (res.length < pageSize || page > 5) {
-			break;
-		}
-	}
-	return results.filter(
+	return (await apiFetchList<Database>(`/d1/database`)).filter(
 		(db) =>
 			db.name.includes("tmp-e2e") && // Databases are more than an hour old
 			Date.now() - new Date(db.created_at).valueOf() > 1000 * 60 * 60
@@ -231,37 +260,11 @@ export const listTmpDatabases = async () => {
 };
 
 export const deleteDatabase = async (id: string) => {
-	await apiFetch(
-		`/d1/database/${id}`,
-		{
-			method: "DELETE",
-		},
-		true
-	);
+	return (await apiFetch(`/d1/database/${id}`, "DELETE")) !== false;
 };
 
 export const listHyperdriveConfigs = async () => {
-	const pageSize = 100;
-	let page = 1;
-	const results: HyperdriveConfig[] = [];
-	while (results.length % pageSize === 0) {
-		const res = (await apiFetch(
-			`/hyperdrive/configs`,
-			{ method: "GET" },
-			false,
-			new URLSearchParams({
-				per_page: pageSize.toString(),
-				page: page.toString(),
-			})
-		)) as HyperdriveConfig[];
-		page++;
-		results.push(...res);
-
-		if (res.length < pageSize || page > 5) {
-			break;
-		}
-	}
-	return results.filter(
+	return (await apiFetchList<HyperdriveConfig>(`/hyperdrive/configs`)).filter(
 		(config) =>
 			config.name.includes("tmp-e2e") && // Databases are more than an hour old
 			Date.now() - new Date(config.created_on).valueOf() > 1000 * 60 * 60
@@ -269,21 +272,13 @@ export const listHyperdriveConfigs = async () => {
 };
 
 export const deleteHyperdriveConfig = async (id: string) => {
-	await apiFetch(
-		`/hyperdrive/configs/${id}`,
-		{
-			method: "DELETE",
-		},
-		true
-	);
+	return await apiFetch(`/hyperdrive/configs/${id}`, "DELETE");
 };
 
 export const listCertificates = async () => {
-	const results = (await apiFetch(`/mtls_certificates`, {
-		method: "GET",
-	})) as MTlsCertificateResponse[];
-
-	return results.filter(
+	return (
+		await apiFetchList<MTlsCertificateResponse>(`/mtls_certificates`)
+	).filter(
 		(cert) =>
 			cert.name?.includes("tmp-e2e") && // Certs are more than an hour old
 			Date.now() - new Date(cert.uploaded_on).valueOf() > 1000 * 60 * 60
@@ -291,11 +286,5 @@ export const listCertificates = async () => {
 };
 
 export const deleteCertificate = async (id: string) => {
-	await apiFetch(
-		`/mtls_certificates/${id}`,
-		{
-			method: "DELETE",
-		},
-		true
-	);
+	await apiFetch(`/mtls_certificates/${id}`, "DELETE");
 };

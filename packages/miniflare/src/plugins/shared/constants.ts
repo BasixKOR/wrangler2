@@ -1,10 +1,12 @@
 import SCRIPT_OBJECT_ENTRY from "worker:shared/object-entry";
+import SCRIPT_REMOTE_PROXY_CLIENT from "worker:shared/remote-proxy-client";
 import {
 	Worker,
 	Worker_Binding,
 	Worker_Binding_DurableObjectNamespaceDesignator,
 } from "../../runtime";
 import { CoreBindings, SharedBindings } from "../../workers";
+import { RemoteProxyConnectionString } from ".";
 
 export const SOCKET_ENTRY = "entry";
 export const SOCKET_ENTRY_LOCAL = "entry:local";
@@ -66,6 +68,31 @@ export function objectEntryWorker(
 			{
 				name: SharedBindings.DURABLE_OBJECT_NAMESPACE_OBJECT,
 				durableObjectNamespace,
+			},
+		],
+	};
+}
+
+export function remoteProxyClientWorker(
+	remoteProxyConnectionString: RemoteProxyConnectionString,
+	binding: string
+) {
+	return {
+		compatibilityDate: "2025-01-01",
+		modules: [
+			{
+				name: "index.worker.js",
+				esModule: SCRIPT_REMOTE_PROXY_CLIENT(),
+			},
+		],
+		bindings: [
+			{
+				name: "remoteProxyConnectionString",
+				text: remoteProxyConnectionString.href,
+			},
+			{
+				name: "binding",
+				text: binding,
 			},
 		],
 	};

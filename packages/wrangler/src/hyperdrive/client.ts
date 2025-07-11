@@ -8,6 +8,7 @@ export type HyperdriveConfig = {
 	origin: PublicOrigin;
 	caching?: CachingOptions;
 	mtls?: Mtls;
+	origin_connection_limit?: number;
 };
 
 export type OriginDatabase = {
@@ -75,6 +76,7 @@ export type CreateUpdateHyperdriveBody = {
 	origin: OriginWithSecrets;
 	caching?: CachingOptions;
 	mtls?: Mtls;
+	origin_connection_limit?: number;
 };
 
 export type PatchHyperdriveBody = {
@@ -82,6 +84,7 @@ export type PatchHyperdriveBody = {
 	origin?: OriginWithSecretsPartial;
 	caching?: CachingOptions;
 	mtls?: Mtls;
+	origin_connection_limit?: number;
 };
 
 export type Mtls = {
@@ -97,17 +100,25 @@ export async function createConfig(
 	body: CreateUpdateHyperdriveBody
 ): Promise<HyperdriveConfig> {
 	const accountId = await requireAuth(config);
-	return await fetchResult(`/accounts/${accountId}/hyperdrive/configs`, {
-		method: "POST",
-		body: JSON.stringify(body),
-	});
+	return await fetchResult(
+		config,
+		`/accounts/${accountId}/hyperdrive/configs`,
+		{
+			method: "POST",
+			body: JSON.stringify(body),
+		}
+	);
 }
 
 export async function deleteConfig(config: Config, id: string): Promise<void> {
 	const accountId = await requireAuth(config);
-	return await fetchResult(`/accounts/${accountId}/hyperdrive/configs/${id}`, {
-		method: "DELETE",
-	});
+	return await fetchResult(
+		config,
+		`/accounts/${accountId}/hyperdrive/configs/${id}`,
+		{
+			method: "DELETE",
+		}
+	);
 }
 
 export async function getConfig(
@@ -115,14 +126,19 @@ export async function getConfig(
 	id: string
 ): Promise<HyperdriveConfig> {
 	const accountId = await requireAuth(config);
-	return await fetchResult(`/accounts/${accountId}/hyperdrive/configs/${id}`, {
-		method: "GET",
-	});
+	return await fetchResult(
+		config,
+		`/accounts/${accountId}/hyperdrive/configs/${id}`,
+		{
+			method: "GET",
+		}
+	);
 }
 
 export async function listConfigs(config: Config): Promise<HyperdriveConfig[]> {
 	const accountId = await requireAuth(config);
 	return await fetchPagedListResult(
+		config,
 		`/accounts/${accountId}/hyperdrive/configs`,
 		{
 			method: "GET",
@@ -136,8 +152,12 @@ export async function patchConfig(
 	body: PatchHyperdriveBody
 ): Promise<HyperdriveConfig> {
 	const accountId = await requireAuth(config);
-	return await fetchResult(`/accounts/${accountId}/hyperdrive/configs/${id}`, {
-		method: "PATCH",
-		body: JSON.stringify(body),
-	});
+	return await fetchResult(
+		config,
+		`/accounts/${accountId}/hyperdrive/configs/${id}`,
+		{
+			method: "PATCH",
+			body: JSON.stringify(body),
+		}
+	);
 }

@@ -2,20 +2,20 @@ import assert from "assert";
 import { readFileSync, realpathSync, writeFileSync } from "fs";
 import path from "path";
 import { watch } from "chokidar";
-import { noBundleWorker } from "../../deploy/deploy";
 import { bundleWorker, shouldCheckFetch } from "../../deployment-bundle/bundle";
 import { getBundleType } from "../../deployment-bundle/bundle-type";
 import {
 	createModuleCollector,
 	getWrangler1xLegacyModuleReferences,
 } from "../../deployment-bundle/module-collection";
+import { noBundleWorker } from "../../deployment-bundle/no-bundle-worker";
 import { runCustomBuild } from "../../deployment-bundle/run-custom-build";
 import { getAssetChangeMessage } from "../../dev";
 import { runBuild } from "../../dev/use-esbuild";
 import { logger } from "../../logger";
 import { isNavigatorDefined } from "../../navigator-user-agent";
-import { debounce } from "../../pages/utils";
 import { getWranglerTmpDir } from "../../paths";
+import { debounce } from "../../utils/debounce";
 import { Controller } from "./BaseController";
 import { castErrorCause } from "./events";
 import { convertBindingsToCfWorkerInitBindings } from "./utils";
@@ -80,6 +80,7 @@ export class BundlerController extends Controller<BundlerControllerEventMap> {
 			const entry: Entry = {
 				file: config.entrypoint,
 				projectRoot: config.projectRoot,
+				configPath: config.config,
 				format: config.build.format,
 				moduleRoot: config.build.moduleRoot,
 				exports: config.build.exports,
@@ -117,6 +118,7 @@ export class BundlerController extends Controller<BundlerControllerEventMap> {
 						jsxFragment: config.build.jsxFactory,
 						tsconfig: config.build.tsconfig,
 						minify: config.build.minify,
+						keepNames: config.build.keepNames ?? true,
 						nodejsCompatMode: config.build.nodejsCompatMode,
 						define: config.build.define,
 						checkFetch: shouldCheckFetch(
@@ -147,6 +149,8 @@ export class BundlerController extends Controller<BundlerControllerEventMap> {
 
 						// sourcemap defaults to true in dev
 						sourcemap: undefined,
+
+						metafile: undefined,
 					});
 			if (buildAborter.signal.aborted) {
 				return;
@@ -195,7 +199,7 @@ export class BundlerController extends Controller<BundlerControllerEventMap> {
 
 		this.#customBuildWatcher = watch(pathsToWatch, {
 			persistent: true,
-			// TODO: add comments re this ans ready
+			// The initial custom build is always done in getEntry()
 			ignoreInitial: true,
 		});
 		this.#customBuildWatcher.on("ready", () => {
@@ -227,6 +231,7 @@ export class BundlerController extends Controller<BundlerControllerEventMap> {
 		const entry: Entry = {
 			file: config.entrypoint,
 			projectRoot: config.projectRoot,
+			configPath: config.config,
 			format: config.build.format,
 			moduleRoot: config.build.moduleRoot,
 			exports: config.build.exports,
@@ -246,6 +251,7 @@ export class BundlerController extends Controller<BundlerControllerEventMap> {
 				rules: config.build.moduleRules,
 				tsconfig: config.build?.tsconfig,
 				minify: config.build?.minify,
+				keepNames: config.build?.keepNames ?? true,
 				nodejsCompatMode: config.build.nodejsCompatMode,
 				define: config.build.define,
 				alias: config.build.alias,

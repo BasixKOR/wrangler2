@@ -276,6 +276,42 @@ describe("hyperdrive commands", () => {
 		`);
 	});
 
+	it("should handle creating a hyperdrive config with origin_connection_limit", async () => {
+		const reqProm = mockHyperdriveCreate();
+		await runWrangler(
+			"hyperdrive create test123 --connection-string='postgresql://test:password@example.com:12345/neondb' --origin-connection-limit=50"
+		);
+
+		await expect(reqProm).resolves.toMatchInlineSnapshot(`
+			Object {
+			  "name": "test123",
+			  "origin": Object {
+			    "database": "neondb",
+			    "host": "example.com",
+			    "password": "password",
+			    "port": 12345,
+			    "scheme": "postgresql",
+			    "user": "test",
+			  },
+			  "origin_connection_limit": 50,
+			}
+		`);
+		expect(std.out).toMatchInlineSnapshot(`
+			"🚧 Creating 'test123'
+			✅ Created new Hyperdrive PostgreSQL config: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+			📋 To start using your config from a Worker, add the following binding configuration to your Wrangler configuration file:
+
+			{
+			  \\"hyperdrive\\": [
+			    {
+			      \\"binding\\": \\"HYPERDRIVE\\",
+			      \\"id\\": \\"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\\"
+			    }
+			  ]
+			}"
+		`);
+	});
+
 	it("should handle creating a hyperdrive config if the user is URL encoded", async () => {
 		const reqProm = mockHyperdriveCreate();
 		await runWrangler(
@@ -761,15 +797,15 @@ describe("hyperdrive commands", () => {
 		await runWrangler("hyperdrive list");
 		expect(std.out).toMatchInlineSnapshot(`
 			"📋 Listing Hyperdrive configs
-			┌──────────────────────────────────────┬─────────────┬─────────┬────────────────┬──────┬────────────┬───────────┬──────────┬───────────────────────────────────────────────────────────────────────────────────┐
-			│ id                                   │ name        │ user    │ host           │ port │ scheme     │ database  │ caching  │ mtls                                                                              │
-			├──────────────────────────────────────┼─────────────┼─────────┼────────────────┼──────┼────────────┼───────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────┤
-			│ xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx │ test123     │ test    │ example.com    │ 5432 │ PostgreSQL │ neondb    │ enabled  │                                                                                   │
-			├──────────────────────────────────────┼─────────────┼─────────┼────────────────┼──────┼────────────┼───────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────┤
-			│ yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy │ new-db      │ dbuser  │ www.google.com │ 3211 │ PostgreSQL │ mydb      │ disabled │                                                                                   │
-			├──────────────────────────────────────┼─────────────┼─────────┼────────────────┼──────┼────────────┼───────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────┤
-			│ zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz │ new-db-mtls │ pg-mtls │ www.mtls.com   │ 3212 │            │ mydb-mtls │ enabled  │ {\\"ca_certificate_id\\":\\"1234\\",\\"mtls_certificate_id\\":\\"1234\\",\\"sslmode\\":\\"verify-full\\"} │
-			└──────────────────────────────────────┴─────────────┴─────────┴────────────────┴──────┴────────────┴───────────┴──────────┴───────────────────────────────────────────────────────────────────────────────────┘"
+			┌─┬─┬─┬─┬─┬─┬─┬─┬─┬─┐
+			│ id │ name │ user │ host │ port │ scheme │ database │ caching │ mtls │ origin_connection_limit │
+			├─┼─┼─┼─┼─┼─┼─┼─┼─┼─┤
+			│ xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx │ test123 │ test │ example.com │ 5432 │ PostgreSQL │ neondb │ enabled │ │ 25 │
+			├─┼─┼─┼─┼─┼─┼─┼─┼─┼─┤
+			│ yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy │ new-db │ dbuser │ www.google.com │ 3211 │ PostgreSQL │ mydb │ disabled │ │ │
+			├─┼─┼─┼─┼─┼─┼─┼─┼─┼─┤
+			│ zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz │ new-db-mtls │ pg-mtls │ www.mtls.com │ 3212 │ │ mydb-mtls │ enabled │ {\\"ca_certificate_id\\":\\"1234\\",\\"mtls_certificate_id\\":\\"1234\\",\\"sslmode\\":\\"verify-full\\"} │ │
+			└─┴─┴─┴─┴─┴─┴─┴─┴─┴─┘"
 		`);
 	});
 
@@ -786,7 +822,8 @@ describe("hyperdrive commands", () => {
 			    \\"port\\": 5432,
 			    \\"database\\": \\"neondb\\",
 			    \\"user\\": \\"test\\"
-			  }
+			  },
+			  \\"origin_connection_limit\\": 25
 			}"
 		`);
 	});
@@ -825,7 +862,8 @@ describe("hyperdrive commands", () => {
 			    \\"port\\": 1234,
 			    \\"database\\": \\"neondb\\",
 			    \\"user\\": \\"test\\"
-			  }
+			  },
+			  \\"origin_connection_limit\\": 25
 			}"
 		`);
 	});
@@ -855,7 +893,8 @@ describe("hyperdrive commands", () => {
 			    \\"port\\": 5432,
 			    \\"database\\": \\"neondb\\",
 			    \\"user\\": \\"newuser\\"
-			  }
+			  },
+			  \\"origin_connection_limit\\": 25
 			}"
 		`);
 	});
@@ -917,7 +956,8 @@ describe("hyperdrive commands", () => {
 			  \\"caching\\": {
 			    \\"max_age\\": 30,
 			    \\"stale_while_revalidate\\": 15
-			  }
+			  },
+			  \\"origin_connection_limit\\": 25
 			}"
 		`);
 	});
@@ -950,7 +990,37 @@ describe("hyperdrive commands", () => {
 			  },
 			  \\"caching\\": {
 			    \\"disabled\\": true
-			  }
+			  },
+			  \\"origin_connection_limit\\": 25
+			}"
+		`);
+	});
+
+	it("should handle updating a hyperdrive config's origin_connection_limit", async () => {
+		const reqProm = mockHyperdriveUpdate();
+		await runWrangler(
+			"hyperdrive update xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx --origin-connection-limit=100"
+		);
+
+		await expect(reqProm).resolves.toMatchInlineSnapshot(`
+			Object {
+			  "origin_connection_limit": 100,
+			}
+		`);
+		expect(std.out).toMatchInlineSnapshot(`
+			"🚧 Updating 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+			✅ Updated xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx Hyperdrive config
+			 {
+			  \\"id\\": \\"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\\",
+			  \\"name\\": \\"test123\\",
+			  \\"origin\\": {
+			    \\"scheme\\": \\"postgresql\\",
+			    \\"host\\": \\"example.com\\",
+			    \\"port\\": 5432,
+			    \\"database\\": \\"neondb\\",
+			    \\"user\\": \\"test\\"
+			  },
+			  \\"origin_connection_limit\\": 100
 			}"
 		`);
 	});
@@ -978,7 +1048,8 @@ describe("hyperdrive commands", () => {
 			    \\"port\\": 5432,
 			    \\"database\\": \\"neondb\\",
 			    \\"user\\": \\"test\\"
-			  }
+			  },
+			  \\"origin_connection_limit\\": 25
 			}"
 		`);
 	});
@@ -1013,7 +1084,8 @@ describe("hyperdrive commands", () => {
 			    \\"database\\": \\"mydb\\",
 			    \\"user\\": \\"newuser\\",
 			    \\"access_client_id\\": \\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.access\\"
-			  }
+			  },
+			  \\"origin_connection_limit\\": 25
 			}"
 		`);
 	});
@@ -1106,7 +1178,8 @@ describe("hyperdrive commands", () => {
 			    \\"ca_certificate_id\\": \\"2345\\",
 			    \\"mtls_certificate_id\\": \\"234\\",
 			    \\"sslmode\\": \\"verify-full\\"
-			  }
+			  },
+			  \\"origin_connection_limit\\": 25
 			}"
 		`);
 	});
@@ -1122,6 +1195,7 @@ const defaultConfig: HyperdriveConfig = {
 		database: "neondb",
 		user: "test",
 	},
+	origin_connection_limit: 25,
 };
 
 /** Create a mock handler for Hyperdrive API */
@@ -1239,6 +1313,9 @@ function mockHyperdriveUpdate(): Promise<PatchHyperdriveBody> {
 								origin,
 								caching: reqBody.caching ?? defaultConfig.caching,
 								mtls: reqBody.mtls,
+								origin_connection_limit:
+									reqBody.origin_connection_limit ??
+									defaultConfig.origin_connection_limit,
 							},
 							true
 						)
@@ -1276,6 +1353,7 @@ function mockHyperdriveCreate(): Promise<CreateUpdateHyperdriveBody> {
 								},
 								caching: reqBody.caching,
 								mtls: reqBody.mtls,
+								origin_connection_limit: reqBody.origin_connection_limit,
 							},
 							true
 						)

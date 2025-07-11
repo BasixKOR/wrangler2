@@ -1,8 +1,11 @@
 import assert from "node:assert";
 import path from "node:path";
+import { isDockerfile } from "@cloudflare/containers-shared";
 import { watch } from "chokidar";
 import { getAssetsOptions, validateAssetsArgsAndConfig } from "../../assets";
+import { fillOpenAPIConfiguration } from "../../cloudchamber/common";
 import { readConfig } from "../../config";
+import { containersScope } from "../../containers";
 import { getEntry } from "../../deployment-bundle/entry";
 import {
 	getBindings,
@@ -12,10 +15,19 @@ import {
 } from "../../dev";
 import { getClassNamesWhichUseSQLite } from "../../dev/class-names-sqlite";
 import { getLocalPersistencePath } from "../../dev/get-local-persistence-path";
+import {
+	getDockerHost,
+	getDockerPath,
+} from "../../environment-variables/misc-variables";
 import { UserError } from "../../errors";
-import { logger } from "../../logger";
+import { getFlag } from "../../experimental-flags";
+import { logger, runWithLogLevel } from "../../logger";
 import { checkTypesDiff } from "../../type-generation/helpers";
-import { requireApiToken, requireAuth } from "../../user";
+import {
+	loginOrRefreshIfRequired,
+	requireApiToken,
+	requireAuth,
+} from "../../user";
 import {
 	DEFAULT_INSPECTOR_PORT,
 	DEFAULT_LOCAL_PORT,
@@ -30,7 +42,7 @@ import { getZoneIdForPreview } from "../../zones";
 import { Controller } from "./BaseController";
 import { castErrorCause } from "./events";
 import {
-	convertCfWorkerInitBindingstoBindings,
+	convertCfWorkerInitBindingsToBindings,
 	extractBindingsOfType,
 	unwrapHook,
 } from "./utils";
@@ -56,6 +68,15 @@ async function resolveDevConfig(
 	input: StartDevWorkerInput
 ): Promise<StartDevWorkerOptions["dev"]> {
 	const auth = async () => {
+		if (input.dev?.remote) {
+			const isLoggedIn = await loginOrRefreshIfRequired(config);
+			if (!isLoggedIn) {
+				throw new UserError(
+					"You must be logged in to use wrangler dev in remote mode. Try logging in, or run wrangler dev --local."
+				);
+			}
+		}
+
 		if (input.dev?.auth) {
 			return unwrapHook(input.dev.auth, config);
 		}
@@ -89,9 +110,9 @@ async function resolveDevConfig(
 	// Because it's a non-recoverable user error, we want it to exit the Wrangler process early to allow the user to fix it.
 	// Calling it here forces the error to be thrown where it will correctly exit the Wrangler process.
 	if (input.dev?.remote) {
-		const { accountId } = await unwrapHook(auth, config);
+		const { accountId } = await auth();
 		assert(accountId, "Account ID must be provided for remote dev");
-		await getZoneIdForPreview({ host, routes, accountId });
+		await getZoneIdForPreview(config, { host, routes, accountId });
 	}
 
 	const initialIp = input.dev?.server?.hostname ?? config.dev.ip;
@@ -112,12 +133,15 @@ async function resolveDevConfig(
 			httpsKeyPath: input.dev?.server?.httpsKeyPath,
 			httpsCertPath: input.dev?.server?.httpsCertPath,
 		},
-		inspector: {
-			port:
-				input.dev?.inspector?.port ??
-				config.dev.inspector_port ??
-				(await getInspectorPort()),
-		},
+		inspector:
+			input.dev?.inspector === false
+				? false
+				: {
+						port:
+							input.dev?.inspector?.port ??
+							config.dev.inspector_port ??
+							(await getInspectorPort()),
+					},
 		origin: {
 			secure:
 				input.dev?.origin?.secure ?? config.dev.upstream_protocol === "https",
@@ -131,6 +155,16 @@ async function resolveDevConfig(
 		bindVectorizeToProd: input.dev?.bindVectorizeToProd ?? false,
 		multiworkerPrimary: input.dev?.multiworkerPrimary,
 		imagesLocalMode: input.dev?.imagesLocalMode ?? false,
+		experimentalRemoteBindings:
+			input.dev?.experimentalRemoteBindings ?? getFlag("REMOTE_BINDINGS"),
+		enableContainers:
+			input.dev?.enableContainers ?? config.dev.enable_containers,
+		dockerPath: input.dev?.dockerPath ?? getDockerPath(),
+		containerEngine:
+			input.dev?.containerEngine ??
+			config.dev.container_engine ??
+			getDockerHost(),
+		containerBuildId: input.dev?.containerBuildId,
 	} satisfies StartDevWorkerOptions["dev"];
 }
 
@@ -138,27 +172,33 @@ async function resolveBindings(
 	config: Config,
 	input: StartDevWorkerInput
 ): Promise<{ bindings: StartDevWorkerOptions["bindings"]; unsafe?: CfUnsafe }> {
-	const bindings = getBindings(config, input.env, !input.dev?.remote, {
-		kv: extractBindingsOfType("kv_namespace", input.bindings),
-		vars: Object.fromEntries(
-			extractBindingsOfType("plain_text", input.bindings).map((b) => [
-				b.binding,
-				b.value,
-			])
-		),
-		durableObjects: extractBindingsOfType(
-			"durable_object_namespace",
-			input.bindings
-		),
-		r2: extractBindingsOfType("r2_bucket", input.bindings),
-		services: extractBindingsOfType("service", input.bindings),
-		d1Databases: extractBindingsOfType("d1", input.bindings),
-		ai: extractBindingsOfType("ai", input.bindings)?.[0],
-		version_metadata: extractBindingsOfType(
-			"version_metadata",
-			input.bindings
-		)?.[0],
-	});
+	const bindings = getBindings(
+		config,
+		input.env,
+		!input.dev?.remote,
+		{
+			kv: extractBindingsOfType("kv_namespace", input.bindings),
+			vars: Object.fromEntries(
+				extractBindingsOfType("plain_text", input.bindings).map((b) => [
+					b.binding,
+					b.value,
+				])
+			),
+			durableObjects: extractBindingsOfType(
+				"durable_object_namespace",
+				input.bindings
+			),
+			r2: extractBindingsOfType("r2_bucket", input.bindings),
+			services: extractBindingsOfType("service", input.bindings),
+			d1Databases: extractBindingsOfType("d1", input.bindings),
+			ai: extractBindingsOfType("ai", input.bindings)?.[0],
+			version_metadata: extractBindingsOfType(
+				"version_metadata",
+				input.bindings
+			)?.[0],
+		},
+		input.dev?.experimentalRemoteBindings
+	);
 
 	const maskedVars = maskVars(bindings, config);
 
@@ -168,18 +208,20 @@ async function resolveBindings(
 			...bindings,
 			vars: maskedVars,
 		},
+		input.tailConsumers ?? config.tail_consumers,
 		{
 			registry: input.dev?.registry,
 			local: !input.dev?.remote,
 			imagesLocalMode: input.dev?.imagesLocalMode,
 			name: config.name,
+			vectorizeBindToProd: input.dev?.bindVectorizeToProd,
 		}
 	);
 
 	return {
 		bindings: {
 			...input.bindings,
-			...convertCfWorkerInitBindingstoBindings(bindings),
+			...convertCfWorkerInitBindingsToBindings(bindings),
 		},
 		unsafe: bindings.unsafe,
 	};
@@ -271,6 +313,7 @@ async function resolveConfig(
 		config: config.configPath,
 		compatibilityDate: getDevCompatibilityDate(config, input.compatibilityDate),
 		compatibilityFlags: input.compatibilityFlags ?? config.compatibility_flags,
+		complianceRegion: input.complianceRegion ?? config.compliance_region,
 		entrypoint: entry.file,
 		projectRoot: entry.projectRoot,
 		bindings,
@@ -289,6 +332,7 @@ async function resolveConfig(
 			moduleRules: input.build?.moduleRules ?? getRules(config),
 
 			minify: input.build?.minify ?? config.minify,
+			keepNames: input.build?.keepNames ?? config.keep_names,
 			define: { ...config.define, ...input.build?.define },
 			custom: {
 				command: input.build?.custom?.command ?? config.build?.command,
@@ -303,6 +347,7 @@ async function resolveConfig(
 			tsconfig: input.build?.tsconfig ?? config.tsconfig,
 			exports: entry.exports,
 		},
+		containers: config.containers,
 		dev: await resolveDevConfig(config, input),
 		legacy: {
 			site: legacySite,
@@ -314,14 +359,16 @@ async function resolveConfig(
 			metadata: input.unsafe?.metadata ?? unsafe?.metadata,
 		},
 		assets: assetsOptions,
+		tailConsumers: config.tail_consumers ?? [],
 	} satisfies StartDevWorkerOptions;
 
 	if (
-		extractBindingsOfType("browser", resolved.bindings).length &&
-		!resolved.dev.remote
+		extractBindingsOfType("analytics_engine", resolved.bindings).length &&
+		!resolved.dev.remote &&
+		resolved.build.format === "service-worker"
 	) {
-		throw new UserError(
-			"Browser Rendering is not supported locally. Please use `wrangler dev --remote` instead."
+		logger.warn(
+			"Analytics Engine is not supported locally when using the service-worker format. Please migrate to the module worker format: https://developers.cloudflare.com/workers/reference/migrate-to-module-workers/"
 		);
 	}
 
@@ -347,6 +394,16 @@ async function resolveConfig(
 				"If this is required in your project, please add your use case to the following issue:\n" +
 				"https://github.com/cloudflare/workers-sdk/issues/583."
 		);
+	}
+
+	// for pulling containers, we need to make sure the OpenAPI config for the
+	// container API client is properly set so that we can get the correct permissions
+	// from the cloudchamber API to pull from the repository.
+	const needsPulling = resolved.containers?.some(
+		(c) => !isDockerfile(c.image ?? c.configuration?.image, config.configPath)
+	);
+	if (needsPulling && !resolved.dev.remote) {
+		await fillOpenAPIConfiguration(config, containersScope);
 	}
 
 	// TODO(queues) support remote wrangler dev
@@ -380,6 +437,7 @@ async function resolveConfig(
 
 	return resolved;
 }
+
 export class ConfigController extends Controller<ConfigControllerEventMap> {
 	latestInput?: StartDevWorkerInput;
 	latestConfig?: StartDevWorkerOptions;
@@ -394,7 +452,7 @@ export class ConfigController extends Controller<ConfigControllerEventMap> {
 				persistent: true,
 				ignoreInitial: true,
 			}).on("change", async (_event) => {
-				logger.log(`${path.basename(configPath)} changed...`);
+				logger.debug(`${path.basename(configPath)} changed...`);
 				assert(
 					this.latestInput,
 					"Cannot be watching config without having first set an input"
@@ -405,7 +463,9 @@ export class ConfigController extends Controller<ConfigControllerEventMap> {
 	}
 
 	public set(input: StartDevWorkerInput, throwErrors = false) {
-		return this.#updateConfig(input, throwErrors);
+		return runWithLogLevel(input.dev?.logLevel, () =>
+			this.#updateConfig(input, throwErrors)
+		);
 	}
 	public patch(input: Partial<StartDevWorkerInput>) {
 		assert(
@@ -418,7 +478,9 @@ export class ConfigController extends Controller<ConfigControllerEventMap> {
 			...input,
 		};
 
-		return this.#updateConfig(config);
+		return runWithLogLevel(config.dev?.logLevel, () =>
+			this.#updateConfig(config)
+		);
 	}
 
 	async #updateConfig(input: StartDevWorkerInput, throwErrors = false) {
@@ -434,7 +496,7 @@ export class ConfigController extends Controller<ConfigControllerEventMap> {
 					env: input.env,
 					"dispatch-namespace": undefined,
 					"legacy-env": !input.legacy?.enableServiceEnvironments,
-					remote: input.dev?.remote,
+					remote: !!input.dev?.remote,
 					upstreamProtocol:
 						input.dev?.origin?.secure === undefined
 							? undefined
